@@ -384,11 +384,14 @@
 
     <script>
         // 自动检测API地址
-        // 如果通过Flask服务访问（5000端口），使用相对路径
-        // 否则（独立前端服务器或file://），使用完整的后端地址
-        const currentPort = window.location.port;
-        const isFlaskServer = currentPort === '5000' || (currentPort === '' && window.location.hostname === 'localhost');
-        const API_BASE_URL = isFlaskServer ? '/api' : 'http://localhost:5000/api';
+        // 部署到公网时，使用相对路径自动适配当前域名
+        // 如果是本地开发且前端独立运行，使用localhost
+        const isLocalDev = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+        const isFileProtocol = window.location.protocol === 'file:';
+        
+        // 如果通过file://协议访问，使用localhost（本地开发）
+        // 否则使用相对路径（生产环境，自动适配当前域名）
+        const API_BASE_URL = (isFileProtocol && isLocalDev) ? 'http://localhost:5000/api' : '/api';
         
         console.log('当前访问方式:', window.location.href);
         console.log('API地址:', API_BASE_URL);

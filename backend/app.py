@@ -12,7 +12,14 @@ import re
 from typing import List, Dict, Tuple, Optional
 
 app = Flask(__name__, static_folder='../frontend', static_url_path='')
-CORS(app, resources={r"/api/*": {"origins": "*"}})
+# 配置CORS，允许所有来源（生产环境建议限制特定域名）
+CORS(app, resources={
+    r"/api/*": {
+        "origins": "*",
+        "methods": ["GET", "POST", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization"]
+    }
+})
 
 # 配置
 UPLOAD_FOLDER = 'uploads'
