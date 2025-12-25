@@ -518,10 +518,10 @@ def extract_tables_as_pdf(pdf_path: str, output_path: Optional[str] = None, sele
             # 打开源PDF
             source_pdf = fitz.open(pdf_path)
             output_pdf = fitz.open()  # 创建新的PDF
-        
-        pages_added = 0
-        
-        for page_num, regions in sorted(page_regions.items()):
+            
+            pages_added = 0
+            
+            for page_num, regions in sorted(page_regions.items()):
                 page_index = page_num - 1
                 
                 if page_index >= len(source_pdf):
@@ -634,15 +634,15 @@ def extract_tables_as_pdf(pdf_path: str, output_path: Optional[str] = None, sele
             pages_added = 0
             
             for page_num, regions in sorted(page_regions.items()):
-            page_index = page_num - 1
-            
-            if page_index >= len(pdf_reader.pages):
-                print(f"  警告: 页面 {page_num} 超出范围，跳过")
-                continue
-            
-            original_page = pdf_reader.pages[page_index]
-            
-            for region_idx, (left, bottom, right, top) in enumerate(regions):
+                page_index = page_num - 1
+                
+                if page_index >= len(pdf_reader.pages):
+                    print(f"  警告: 页面 {page_num} 超出范围，跳过")
+                    continue
+                
+                original_page = pdf_reader.pages[page_index]
+                
+                for region_idx, (left, bottom, right, top) in enumerate(regions):
                     try:
                         # 使用序列化方法复制页面（比deepcopy快）
                         temp_writer = PdfWriter()
@@ -655,11 +655,11 @@ def extract_tables_as_pdf(pdf_path: str, output_path: Optional[str] = None, sele
                         
                         temp_reader = PdfReader(temp_buffer, strict=False)
                         cropped_page = temp_reader.pages[0]
-                cropped_page.cropbox = RectangleObject([left, bottom, right, top])
-                
-                pdf_writer.add_page(cropped_page)
-                pages_added += 1
-                
+                        cropped_page.cropbox = RectangleObject([left, bottom, right, top])
+                        
+                        pdf_writer.add_page(cropped_page)
+                        pages_added += 1
+                        
                         if pages_added % 10 == 0:
                             print(f"  已处理 {pages_added}/{total_regions} 个区域...")
                     
@@ -668,8 +668,8 @@ def extract_tables_as_pdf(pdf_path: str, output_path: Optional[str] = None, sele
                         continue
             
             print(f"\n正在保存PDF文件到: {output_path}...")
-        with open(output_path, 'wb') as output_file:
-            pdf_writer.write(output_file)
+            with open(output_path, 'wb') as output_file:
+                pdf_writer.write(output_file)
             print(f"  [OK] PDF文件保存成功，共 {pages_added} 页")
         
         print(f"\n" + "=" * 60)
