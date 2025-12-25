@@ -1306,9 +1306,23 @@ def get_tables_list():
         if not hasattr(extract_module, 'get_all_tables_info'):
             return jsonify({'error': '模块中未找到 get_all_tables_info 函数'}), 500
         
-        # 调用函数获取表格列表
-        all_tables_info = extract_module.get_all_tables_info(filepath)
-        print(f"[调试] 获取到 {len(all_tables_info)} 个表格")
+        # 调用函数获取表格列表（设置25秒超时，避免Railway超时）
+        try:
+            all_tables_info = extract_module.get_all_tables_info(filepath, timeout_seconds=25)
+            print(f"[调试] 获取到 {len(all_tables_info)} 个表格")
+        except Exception as e:
+            # 如果超时或其他错误，尝试使用更少的页面快速预览
+            print(f"[警告] 完整处理失败: {str(e)}，尝试快速预览模式（前100页）")
+            try:
+                all_tables_info = extract_module.get_all_tables_info(filepath, max_pages=100, timeout_seconds=20)
+                print(f"[调试] 快速预览模式获取到 {len(all_tables_info)} 个表格")
+            except Exception as e2:
+                error_msg = f"获取表格列表失败: {str(e2)}"
+                print(f"错误: {error_msg}")
+                return jsonify({
+                    'error': error_msg,
+                    'hint': 'PDF文件可能过大或格式复杂，请尝试使用较小的PDF文件'
+                }), 500
         
         # 过滤表格列表，只显示有正式名称的表格（保留文档开头的"页码-表格编号"表格）
         if hasattr(extract_module, 'filter_tables_for_display'):
