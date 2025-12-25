@@ -1,0 +1,19 @@
+{
+  "deploy_type": "server",
+  "server": {
+    "host": "your-server-ip-or-domain",
+    "user": "root",
+    "ssh_key_path": "~/.ssh/id_rsa",
+    "project_path": "/opt/pdf-extractor"
+  },
+  "docker": {
+    "image_name": "pdf-extractor",
+    "port": 5000
+  },
+  "nginx": {
+    "enabled": true,
+    "domain": "your-domain.com",
+    "ssl_enabled": true
+  }
+}
+
