@@ -1306,22 +1306,38 @@ def get_tables_list():
         if not hasattr(extract_module, 'get_all_tables_info'):
             return jsonify({'error': '模块中未找到 get_all_tables_info 函数'}), 500
         
-        # 调用函数获取表格列表（设置25秒超时，避免Railway超时）
-        try:
-            all_tables_info = extract_module.get_all_tables_info(filepath, timeout_seconds=25)
-            print(f"[调试] 获取到 {len(all_tables_info)} 个表格")
-        except Exception as e:
-            # 如果超时或其他错误，尝试使用更少的页面快速预览
-            print(f"[警告] 完整处理失败: {str(e)}，尝试快速预览模式（前100页）")
+        # 检查是否请求完整处理（默认使用快速预览模式以提高响应速度）
+        full_scan = data.get('full_scan', False)
+        
+        if full_scan:
+            # 完整扫描模式：处理所有页面，超时时间20秒
             try:
-                all_tables_info = extract_module.get_all_tables_info(filepath, max_pages=100, timeout_seconds=20)
+                all_tables_info = extract_module.get_all_tables_info(filepath, timeout_seconds=20)
+                print(f"[调试] 完整扫描获取到 {len(all_tables_info)} 个表格")
+            except Exception as e:
+                # 如果完整扫描超时，降级到快速预览模式
+                print(f"[警告] 完整扫描超时: {str(e)}，降级到快速预览模式（前100页）")
+                try:
+                    all_tables_info = extract_module.get_all_tables_info(filepath, max_pages=100, timeout_seconds=15)
+                    print(f"[调试] 快速预览模式获取到 {len(all_tables_info)} 个表格")
+                except Exception as e2:
+                    error_msg = f"获取表格列表失败: {str(e2)}"
+                    print(f"错误: {error_msg}")
+                    return jsonify({
+                        'error': error_msg,
+                        'hint': 'PDF文件可能过大或格式复杂，请尝试使用较小的PDF文件'
+                    }), 500
+        else:
+            # 快速预览模式（默认）：只处理前100页，超时时间15秒
+            try:
+                all_tables_info = extract_module.get_all_tables_info(filepath, max_pages=100, timeout_seconds=15)
                 print(f"[调试] 快速预览模式获取到 {len(all_tables_info)} 个表格")
-            except Exception as e2:
-                error_msg = f"获取表格列表失败: {str(e2)}"
+            except Exception as e:
+                error_msg = f"获取表格列表失败: {str(e)}"
                 print(f"错误: {error_msg}")
                 return jsonify({
                     'error': error_msg,
-                    'hint': 'PDF文件可能过大或格式复杂，请尝试使用较小的PDF文件'
+                    'hint': 'PDF文件可能过大或格式复杂，请尝试使用较小的PDF文件或使用完整扫描模式'
                 }), 500
         
         # 过滤表格列表，只显示有正式名称的表格（保留文档开头的"页码-表格编号"表格）

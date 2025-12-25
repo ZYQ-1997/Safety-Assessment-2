@@ -332,10 +332,13 @@ def get_all_tables_info(pdf_path: str, max_pages: Optional[int] = None, timeout_
             
             print(f"[调试] 开始处理PDF，共 {total_pages} 页，将处理前 {pages_to_process} 页")
             
+            # 预留2秒缓冲时间，确保在超时前返回结果
+            effective_timeout = timeout_seconds - 2
+            
             for page_num, page in enumerate(pdf.pages, start=1):
-                # 检查超时（Windows系统使用）
+                # 检查超时（Windows系统使用，预留缓冲时间）
                 elapsed = time.time() - start_time
-                if elapsed > timeout_seconds:
+                if elapsed > effective_timeout:
                     print(f"[警告] 处理超时（{elapsed:.1f}秒），已处理 {page_num - 1} 页，找到 {len(tables_info)} 个表格")
                     break
                 
@@ -354,6 +357,12 @@ def get_all_tables_info(pdf_path: str, max_pages: Optional[int] = None, timeout_
                     
                     if table_objects:
                         for table_num, table_obj in enumerate(table_objects, start=1):
+                            # 在处理每个表格前也检查超时
+                            elapsed = time.time() - start_time
+                            if elapsed > effective_timeout:
+                                print(f"[警告] 处理超时（{elapsed:.1f}秒），已处理 {page_num} 页，找到 {len(tables_info)} 个表格")
+                                break
+                            
                             table_id_counter += 1
                             table_id = f"page_{page_num}_table_{table_num}"
                             
@@ -361,7 +370,10 @@ def get_all_tables_info(pdf_path: str, max_pages: Optional[int] = None, timeout_
                             table_name = None
                             try:
                                 # 只提取表格上方的文本，不提取整个表格数据（更快）
-                                table_name = extract_table_name_from_page(page, table_obj.bbox, None)
+                                # 如果已经接近超时，跳过名称提取以节省时间
+                                elapsed = time.time() - start_time
+                                if elapsed < effective_timeout - 0.5:  # 至少留出0.5秒
+                                    table_name = extract_table_name_from_page(page, table_obj.bbox, None)
                             except Exception as e:
                                 # 如果提取名称失败，继续处理
                                 pass
@@ -377,6 +389,12 @@ def get_all_tables_info(pdf_path: str, max_pages: Optional[int] = None, timeout_
                                 'name': table_name,
                                 'bbox': table_obj.bbox  # (x0, top, x1, bottom)
                             })
+                        
+                        # 如果因为超时跳出内层循环，也要跳出外层循环
+                        elapsed = time.time() - start_time
+                        if elapsed > effective_timeout:
+                            break
+                            
                 except Exception as e:
                     # 如果某页处理失败，记录错误但继续处理其他页
                     print(f"[警告] 处理第 {page_num} 页时出错: {str(e)}")
