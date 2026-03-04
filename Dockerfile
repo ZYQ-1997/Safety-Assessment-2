@@ -11,8 +11,8 @@ COPY frontend ./frontend
 COPY extract_all_tables.py .
 
 ENV PYTHONPATH=/app
-ENV PORT=7860
-EXPOSE 7860
+ENV PORT=8080
+EXPOSE 8080
 
-# 标准生产入口：直接调用 gunicorn（PORT 由环境变量注入，默认 7860）
-CMD ["sh", "-c", "exec gunicorn --bind 0.0.0.0:${PORT:-7860} --workers 1 --threads 4 --timeout 300 backend.wsgi:application"]
+# 标准生产入口：gunicorn + Flask WSGI（不依赖自定义启动脚本）
+CMD ["gunicorn", "-w", "4", "backend.wsgi:application", "--bind", "0.0.0.0:8080", "--timeout", "300"]

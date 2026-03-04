@@ -11,10 +11,11 @@
 ### 使用 Cloudflare Tunnel（推荐，免费）
 
 1. 安装 [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/install-and-setup/installation/)。
-2. 在项目目录启动本地服务：
+2. 在项目目录启动本地服务（仅开发/演示）：
    ```bash
    python start_server.py
    ```
+   生产环境请使用标准命令：`gunicorn -w 4 --bind 0.0.0.0:$PORT --timeout 300 backend.wsgi:application`
 3. 新开一个终端，运行：
    ```bash
    cloudflared tunnel --url http://localhost:5000
@@ -53,7 +54,7 @@
 ### 可选：不用 Docker，用 Python 原生
 
 - **Build Command**：`pip install -r requirements.txt`
-- **Start Command**：`gunicorn --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 300 backend.wsgi:application`
+- **Start Command**：`gunicorn -w 4 --bind 0.0.0.0:$PORT --timeout 300 backend.wsgi:application`
 - **Root Directory**：留空（仓库根目录）。
 
 注意：免费实例约 15 分钟无访问会休眠，首次打开可能需等待几十秒；大文件上传可能受平台限制（通常约 100MB）。
@@ -76,10 +77,10 @@
 ```bash
 # 在项目根目录
 docker build -t pdf-table-extract .
-docker run -d --name pdf-app -p 5000:5000 -e PORT=5000 pdf-table-extract
+docker run -d --name pdf-app -p 8080:8080 pdf-table-extract
 ```
 
-外网访问：`http://你的服务器IP:5000`。
+外网访问：`http://你的服务器IP:8080`。
 
 ### 3. 使用 Nginx 做反向代理（可选，支持 HTTPS）
 
@@ -90,7 +91,7 @@ server {
     listen 80;
     server_name 你的域名.com;
     location / {
-        proxy_pass http://127.0.0.1:5000;
+        proxy_pass http://127.0.0.1:8080;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         client_max_body_size 500M;

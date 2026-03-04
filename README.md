@@ -38,8 +38,8 @@ python start_server.py
 
 **生产环境（标准命令，部署时使用 Procfile / Dockerfile 或以下命令）：**
 ```bash
-# 从项目根目录执行；PORT 由环境变量指定（如未设置则需在命令中写死端口）
-gunicorn --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 300 backend.wsgi:application
+# 从项目根目录执行；PORT 由环境变量指定
+gunicorn -w 4 --bind 0.0.0.0:$PORT --timeout 300 backend.wsgi:application
 ```
 若平台未自动设置工作目录，可先设置：`export PYTHONPATH=.` 或 `set PYTHONPATH=.`（Windows）。
 
