@@ -1,20 +1,17 @@
+# 忽略数据与缓存，减小镜像体积
+*.csv
+**/__pycache__
+__pycache__
 .git
 .gitignore
-__pycache__
-*.pyc
-*.pyo
+outputs/
+
+# 可选：开发/文档类，通常不需要打进镜像
+*.md
+!README.md
 .pytest_cache
-.env
 .venv
 venv
-*.md
-extracted_tables
-parsed_output
-uploads
-outputs
-backend/uploads
-backend/outputs
-*.bat
-*.ps1
-test_*.py
-terminals
+env
+*.pyc
+*.pyo

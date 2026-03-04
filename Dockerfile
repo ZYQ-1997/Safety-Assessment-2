@@ -14,5 +14,5 @@ ENV PYTHONPATH=/app
 ENV PORT=8080
 EXPOSE 8080
 
-# 标准生产入口：gunicorn + Flask WSGI（不依赖自定义启动脚本）
+# 入口说明：Flask 实例在 backend/app.py 变量名为 app；backend/wsgi.py 将其导出为 application，故使用 backend.wsgi:application
 CMD ["gunicorn", "-w", "4", "backend.wsgi:application", "--bind", "0.0.0.0:8080", "--timeout", "300"]
