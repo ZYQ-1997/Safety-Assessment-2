@@ -1,0 +1,21 @@
+{
+  "name": "PDF表格提取 - Safety Assessment",
+  "image": "mcr.microsoft.com/devcontainers/python:3.11",
+  "features": {},
+  "postCreateCommand": "pip install --no-cache-dir -r requirements.txt",
+  "forwardPorts": [5000],
+  "portsAttributes": {
+    "5000": {
+      "label": "Flask (PDF表格提取)",
+      "onAutoForward": "notify"
+    }
+  },
+  "postStartCommand": "nohup python start_server.py > /tmp/flask-server.log 2>&1 & sleep 2",
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "python.defaultInterpreterPath": "/usr/local/bin/python"
+      }
+    }
+  }
+}
