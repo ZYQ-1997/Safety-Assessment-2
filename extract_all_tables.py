@@ -94,12 +94,12 @@ def calculate_table_region(bbox: Tuple[float, float, float, float],
 
 def extract_table_name_from_page(page, table_bbox, table_data) -> Optional[str]:
     """
-    从PDF页面中提取表格名称（优化版，更快）
+    从PDF页面中提取表格名称
     
     参数:
         page: pdfplumber页面对象
         table_bbox: 表格的边界框 (x0, top, x1, bottom)
-        table_data: 表格数据（可选，已废弃，不再使用）
+        table_data: 表格数据（可选）
     
     返回:
         表格名称（如果找到），否则返回None
@@ -107,65 +107,38 @@ def extract_table_name_from_page(page, table_bbox, table_data) -> Optional[str]:
     import re
     
     try:
-        if not table_bbox:
-            return None
-        
-        x0, top, x1, bottom = table_bbox
-        # 减少搜索范围，只向上查找50像素（更快）
-        top_margin = 50
-        search_top = max(0, top - top_margin)
-        
-        # 快速提取表格上方的文本（使用更小的区域）
-        try:
+        if table_bbox:
+            x0, top, x1, bottom = table_bbox
+            # 提取表格上方的文本（向上查找80像素）
+            top_margin = 80
+            search_top = max(0, top - top_margin)
+            
+            # 获取表格上方的文本
             text_above = page.within_bbox((x0, search_top, x1, top)).extract_text()
-        except Exception:
-            # 如果提取失败，尝试使用页面文本的快速搜索
-            try:
-                page_text = page.extract_text()
-                if not page_text:
-                    return None
-                # 简单搜索：查找包含表格关键词的行
-                lines = page_text.split('\n')
-                for line in reversed(lines[:20]):  # 只检查前20行（更快）
-                    line_clean = line.strip()
-                    if len(line_clean) < 3:
+            
+            if text_above:
+                # 按行分割文本
+                lines = [line.strip() for line in text_above.split('\n') if line.strip()]
+                
+                # 从下往上查找（最接近表格的文本更可能是表格名称）
+                for line in reversed(lines):
+                    # 跳过页码、页眉等
+                    if re.match(r'^\d+$', line) or len(line) < 3:
                         continue
+                    
+                    # 清理行内容
+                    line_clean = re.sub(r'\s+', ' ', line).strip()
+                    
+                    # 检查是否包含表格相关关键词
                     table_keywords = ['表', '一览表', '清单', '明细', '统计表', '汇总表', '登记表', '记录表']
                     if any(keyword in line_clean for keyword in table_keywords):
+                        # 提取表格名称（移除可能的编号前缀，如"表1-1"）
                         name = re.sub(r'^表\s*\d+[-\s]*\d*\s*[：:]\s*', '', line_clean)
                         name = re.sub(r'^表\s*\d+\s*[：:]\s*', '', name)
                         name = name.strip()
+                        
                         if 2 <= len(name) <= 50:
                             return name
-            except Exception:
-                pass
-            return None
-        
-        if not text_above:
-            return None
-        
-        # 按行分割文本（限制行数，更快）
-        lines = [line.strip() for line in text_above.split('\n') if line.strip()][-10:]  # 只检查最后10行
-        
-        # 从下往上查找（最接近表格的文本更可能是表格名称）
-        for line in reversed(lines):
-            # 跳过页码、页眉等
-            if re.match(r'^\d+$', line) or len(line) < 3:
-                continue
-            
-            # 清理行内容
-            line_clean = re.sub(r'\s+', ' ', line).strip()
-            
-            # 检查是否包含表格相关关键词
-            table_keywords = ['表', '一览表', '清单', '明细', '统计表', '汇总表', '登记表', '记录表']
-            if any(keyword in line_clean for keyword in table_keywords):
-                # 提取表格名称（移除可能的编号前缀，如"表1-1"）
-                name = re.sub(r'^表\s*\d+[-\s]*\d*\s*[：:]\s*', '', line_clean)
-                name = re.sub(r'^表\s*\d+\s*[：:]\s*', '', name)
-                name = name.strip()
-                
-                if 2 <= len(name) <= 50:
-                    return name
     except Exception:
         pass
     
@@ -279,21 +252,18 @@ def get_related_table_ids(tables_info: List[dict], selected_table_id: str) -> Li
         if is_formal_table_name(name):
             break
         
-        # 如果是"页码-表格编号"格式，添加到相关列表
-        if not is_formal_table_name(name):
-            related_ids.append(table.get('id'))
+        # 执行到这里说明是"页码-表格编号"格式，添加到相关列表
+        related_ids.append(table.get('id'))
     
     return related_ids
 
 
-def get_all_tables_info(pdf_path: str, max_pages: Optional[int] = None, timeout_seconds: int = 25) -> List[dict]:
+def get_all_tables_info(pdf_path: str) -> List[dict]:
     """
-    获取PDF中所有表格的信息列表（优化版，支持超时和页面限制）
+    获取PDF中所有表格的信息列表
     
     参数:
         pdf_path: PDF文件路径
-        max_pages: 最大处理页数（None表示处理所有页面，用于大文件快速预览）
-        timeout_seconds: 超时时间（秒），默认25秒
     
     返回:
         表格信息列表，每个元素包含：
@@ -303,127 +273,46 @@ def get_all_tables_info(pdf_path: str, max_pages: Optional[int] = None, timeout_
         - name: 表格名称（如果识别到）
         - bbox: 表格边界框
     """
-    import signal
-    import time
-    
     if not os.path.exists(pdf_path):
         raise FileNotFoundError(f"文件不存在: {pdf_path}")
     
     tables_info = []
     table_id_counter = 0
-    start_time = time.time()
-    
-    # 超时处理函数（仅用于Unix系统）
-    def timeout_handler(signum, frame):
-        raise TimeoutError(f"处理超时（超过{timeout_seconds}秒）")
     
     try:
-        # 尝试设置超时（仅Unix系统支持）
-        try:
-            signal.signal(signal.SIGALRM, timeout_handler)
-            signal.alarm(timeout_seconds)
-        except (AttributeError, OSError):
-            # Windows系统不支持signal.alarm，使用时间检查
-            pass
-        
         with pdfplumber.open(pdf_path) as pdf:
-            total_pages = len(pdf.pages)
-            pages_to_process = min(total_pages, max_pages) if max_pages else total_pages
-            
-            print(f"[调试] 开始处理PDF，共 {total_pages} 页，将处理前 {pages_to_process} 页")
-            
-            # 预留2秒缓冲时间，确保在超时前返回结果
-            effective_timeout = timeout_seconds - 2
-            
             for page_num, page in enumerate(pdf.pages, start=1):
-                # 检查超时（Windows系统使用，预留缓冲时间）
-                elapsed = time.time() - start_time
-                if elapsed > effective_timeout:
-                    print(f"[警告] 处理超时（{elapsed:.1f}秒），已处理 {page_num - 1} 页，找到 {len(tables_info)} 个表格")
-                    break
+                # 查找表格对象
+                table_objects = page.find_tables()
                 
-                # 如果设置了最大页数，只处理前N页
-                if max_pages and page_num > max_pages:
-                    break
-                
-                # 每处理10页输出一次进度
-                if page_num % 10 == 0:
-                    elapsed = time.time() - start_time
-                    print(f"[进度] 已处理 {page_num}/{pages_to_process} 页，找到 {len(tables_info)} 个表格，耗时 {elapsed:.1f}秒")
-                
-                try:
-                    # 查找表格对象（只查找，不提取数据，更快）
-                    table_objects = page.find_tables()
-                    
-                    if table_objects:
-                        for table_num, table_obj in enumerate(table_objects, start=1):
-                            # 在处理每个表格前也检查超时
-                            elapsed = time.time() - start_time
-                            if elapsed > effective_timeout:
-                                print(f"[警告] 处理超时（{elapsed:.1f}秒），已处理 {page_num} 页，找到 {len(tables_info)} 个表格")
-                                break
-                            
-                            table_id_counter += 1
-                            table_id = f"page_{page_num}_table_{table_num}"
-                            
-                            # 快速提取表格名称（不提取完整表格数据，只提取上方文本）
-                            table_name = None
-                            try:
-                                # 只提取表格上方的文本，不提取整个表格数据（更快）
-                                # 如果已经接近超时，跳过名称提取以节省时间
-                                elapsed = time.time() - start_time
-                                if elapsed < effective_timeout - 0.5:  # 至少留出0.5秒
-                                    table_name = extract_table_name_from_page(page, table_obj.bbox, None)
-                            except Exception as e:
-                                # 如果提取名称失败，继续处理
-                                pass
-                            
-                            # 如果没有识别到名称，使用默认名称
-                            if not table_name:
-                                table_name = f"第{page_num}页-表格{table_num}"
-                            
-                            tables_info.append({
-                                'id': table_id,
-                                'page': page_num,
-                                'table_num': table_num,
-                                'name': table_name,
-                                'bbox': table_obj.bbox  # (x0, top, x1, bottom)
-                            })
+                if table_objects:
+                    for table_num, table_obj in enumerate(table_objects, start=1):
+                        table_id_counter += 1
+                        table_id = f"page_{page_num}_table_{table_num}"
                         
-                        # 如果因为超时跳出内层循环，也要跳出外层循环
-                        elapsed = time.time() - start_time
-                        if elapsed > effective_timeout:
-                            break
-                            
-                except Exception as e:
-                    # 如果某页处理失败，记录错误但继续处理其他页
-                    print(f"[警告] 处理第 {page_num} 页时出错: {str(e)}")
-                    continue
-        
-        # 取消超时（Unix系统）
-        try:
-            signal.alarm(0)
-        except (AttributeError, OSError):
-            pass
-        
-        elapsed = time.time() - start_time
-        print(f"[完成] 处理完成，共找到 {len(tables_info)} 个表格，耗时 {elapsed:.1f}秒")
-        
-    except TimeoutError as e:
-        # 取消超时
-        try:
-            signal.alarm(0)
-        except (AttributeError, OSError):
-            pass
-        print(f"[超时] {str(e)}，已找到 {len(tables_info)} 个表格")
-        # 即使超时，也返回已找到的表格
-        return tables_info
+                        # 尝试提取表格名称
+                        table_data = None
+                        try:
+                            tables = page.extract_tables()
+                            if table_num <= len(tables):
+                                table_data = tables[table_num - 1]
+                        except:
+                            pass
+                        
+                        table_name = extract_table_name_from_page(page, table_obj.bbox, table_data)
+                        
+                        # 如果没有识别到名称，使用默认名称
+                        if not table_name:
+                            table_name = f"第{page_num}页-表格{table_num}"
+                        
+                        tables_info.append({
+                            'id': table_id,
+                            'page': page_num,
+                            'table_num': table_num,
+                            'name': table_name,
+                            'bbox': table_obj.bbox  # (x0, top, x1, bottom)
+                        })
     except Exception as e:
-        # 取消超时
-        try:
-            signal.alarm(0)
-        except (AttributeError, OSError):
-            pass
         error_msg = f"识别表格信息时发生错误: {str(e)}"
         print(f"错误: {error_msg}")
         raise Exception(error_msg) from e
@@ -664,24 +553,11 @@ def extract_tables_as_pdf(pdf_path: str, output_path: Optional[str] = None, sele
                         # 使用变换：将rect的左上角(rect.x0, rect.y0)映射到新页面的(0,0)
                         # 变换矩阵：[1, 0, 0, 1, -rect.x0, -rect.y0]
                         
-                        # 在新页面中显示源页面，目标矩形从(0,0)开始，大小与rect相同
-                        # 源页面从rect位置开始显示
-                        new_page.show_pdf_page(
-                            fitz.Rect(0, 0, rect.width, rect.height),  # 目标位置：新页面的完整区域
-                            source_pdf,  # 源PDF
-                            page_index  # 源页面索引
-                        )
-                        
-                        # 设置新页面的裁剪框，只显示rect区域的内容
-                        # 但这样会显示整个页面，需要另一种方法
-                        # 更好的方法：使用渲染方式
-                        
-                        # 重新实现：使用渲染方式确保内容正确
+                        # 使用渲染方式确保内容正确
                         # 从源页面渲染指定区域
                         pix = source_page.get_pixmap(clip=rect, matrix=fitz.Matrix(2, 2))
                         
-                        # 清空新页面并插入渲染的图片
-                        new_page.clean_contents()  # 清除之前的内容
+                        # 在新页面中插入渲染的图片
                         new_page.insert_image(
                             fitz.Rect(0, 0, rect.width, rect.height),
                             pixmap=pix
@@ -833,7 +709,9 @@ def extract_all_tables_from_pdf(pdf_path: str, output_dir: str = "extracted_tabl
             total_pages = len(pdf.pages)
         
         # 读取输出PDF以获取页数（表格区域页数）
-        from pypdf import PdfReader
+        # 如果USE_PYMUPDF为False，PdfReader已在顶部导入；否则需要导入
+        if USE_PYMUPDF:
+            from pypdf import PdfReader
         output_reader = PdfReader(result_pdf_path, strict=False)
         total_output_pages = len(output_reader.pages)
         

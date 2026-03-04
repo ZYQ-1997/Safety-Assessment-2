@@ -11,28 +11,43 @@ import io
 import re
 from typing import List, Dict, Tuple, Optional
 
-app = Flask(__name__, static_folder='../frontend', static_url_path='')
-# 配置CORS，允许所有来源（生产环境建议限制特定域名）
-CORS(app, resources={
-    r"/api/*": {
-        "origins": "*",
-        "methods": ["GET", "POST", "OPTIONS"],
-        "allow_headers": ["Content-Type", "Authorization"]
-    }
-})
+# ---------------------------------------------------------------------------
+# 配置：优先从环境变量读取，无则使用默认值（与 ENV_VARS.md 表格一致）
+# ---------------------------------------------------------------------------
+def _safe_path(value: str, default: str) -> str:
+    """路径校验：禁止 '..' 与绝对路径。"""
+    if not value or ".." in value or value.startswith("/") or re.match(r"^[A-Za-z]:", value):
+        return default
+    return value.strip()
 
-# 配置
-UPLOAD_FOLDER = 'uploads'
-OUTPUT_FOLDER = 'outputs'
+_PORT = os.getenv("PORT", "5000")
+PORT = int(_PORT) if str(_PORT).strip().isdigit() else 5000
+
+_DEBUG = (os.getenv("FLASK_DEBUG", "false") or "").strip().lower()
+FLASK_DEBUG = _DEBUG in ("1", "true", "yes")
+
+UPLOAD_FOLDER = _safe_path(os.getenv("UPLOAD_FOLDER", "uploads") or "uploads", "uploads")
+OUTPUT_FOLDER = _safe_path(os.getenv("OUTPUT_FOLDER", "outputs") or "outputs", "outputs")
+
+_MAX_MB = os.getenv("MAX_CONTENT_LENGTH_MB", "500")
+MAX_CONTENT_LENGTH_MB = int(_MAX_MB) if str(_MAX_MB).strip().isdigit() else 500
+MAX_CONTENT_LENGTH_MB = max(1, min(500, MAX_CONTENT_LENGTH_MB))
+MAX_CONTENT_LENGTH = MAX_CONTENT_LENGTH_MB * 1024 * 1024
+
+# ---------------------------------------------------------------------------
+
+app = Flask(__name__, static_folder='../frontend', static_url_path='')
+CORS(app, resources={r"/api/*": {"origins": "*"}})
+
 ALLOWED_EXTENSIONS = {'pdf'}
 
-# 确保文件夹存在
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['OUTPUT_FOLDER'] = OUTPUT_FOLDER
-app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500MB最大文件大小
+app.config['MAX_CONTENT_LENGTH'] = MAX_CONTENT_LENGTH
+app.config['DEBUG'] = FLASK_DEBUG
 
 # 添加全局错误处理器，确保所有错误都返回JSON格式
 @app.errorhandler(404)
@@ -1306,39 +1321,9 @@ def get_tables_list():
         if not hasattr(extract_module, 'get_all_tables_info'):
             return jsonify({'error': '模块中未找到 get_all_tables_info 函数'}), 500
         
-        # 检查是否请求完整处理（默认使用快速预览模式以提高响应速度）
-        full_scan = data.get('full_scan', False)
-        
-        if full_scan:
-            # 完整扫描模式：处理所有页面，超时时间20秒
-            try:
-                all_tables_info = extract_module.get_all_tables_info(filepath, timeout_seconds=20)
-                print(f"[调试] 完整扫描获取到 {len(all_tables_info)} 个表格")
-            except Exception as e:
-                # 如果完整扫描超时，降级到快速预览模式
-                print(f"[警告] 完整扫描超时: {str(e)}，降级到快速预览模式（前100页）")
-                try:
-                    all_tables_info = extract_module.get_all_tables_info(filepath, max_pages=100, timeout_seconds=15)
-                    print(f"[调试] 快速预览模式获取到 {len(all_tables_info)} 个表格")
-                except Exception as e2:
-                    error_msg = f"获取表格列表失败: {str(e2)}"
-                    print(f"错误: {error_msg}")
-                    return jsonify({
-                        'error': error_msg,
-                        'hint': 'PDF文件可能过大或格式复杂，请尝试使用较小的PDF文件'
-                    }), 500
-        else:
-            # 快速预览模式（默认）：只处理前100页，超时时间15秒
-            try:
-                all_tables_info = extract_module.get_all_tables_info(filepath, max_pages=100, timeout_seconds=15)
-                print(f"[调试] 快速预览模式获取到 {len(all_tables_info)} 个表格")
-            except Exception as e:
-                error_msg = f"获取表格列表失败: {str(e)}"
-                print(f"错误: {error_msg}")
-                return jsonify({
-                    'error': error_msg,
-                    'hint': 'PDF文件可能过大或格式复杂，请尝试使用较小的PDF文件或使用完整扫描模式'
-                }), 500
+        # 调用函数获取表格列表
+        all_tables_info = extract_module.get_all_tables_info(filepath)
+        print(f"[调试] 获取到 {len(all_tables_info)} 个表格")
         
         # 过滤表格列表，只显示有正式名称的表格（保留文档开头的"页码-表格编号"表格）
         if hasattr(extract_module, 'filter_tables_for_display'):
@@ -1668,15 +1653,17 @@ def index():
     return send_from_directory('../frontend', 'index.html')
 
 if __name__ == '__main__':
+    port = PORT
+    debug = app.config['DEBUG']
     print("=" * 50)
     print("PDF表格提取服务启动中...")
     print("=" * 50)
-    print("前端界面: http://localhost:5000")
-    print("API接口: http://localhost:5000/api")
+    print(f"前端界面: http://0.0.0.0:{port}")
+    print(f"API接口: http://0.0.0.0:{port}/api")
     print("=" * 50)
-    # 打印所有注册的路由用于调试
-    print("\n已注册的路由:")
-    for rule in app.url_map.iter_rules():
-        print(f"  {rule.rule} -> {rule.endpoint} [{', '.join(rule.methods)}]")
-    print("=" * 50)
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    if debug:
+        print("\n已注册的路由:")
+        for rule in app.url_map.iter_rules():
+            print(f"  {rule.rule} -> {rule.endpoint} [{', '.join(rule.methods)}]")
+        print("=" * 50)
+    app.run(debug=debug, host='0.0.0.0', port=port)

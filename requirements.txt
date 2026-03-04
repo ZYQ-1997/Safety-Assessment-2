@@ -6,4 +6,4 @@ openpyxl==3.1.2
 Werkzeug==3.0.1
 pypdf==3.17.0
 PyMuPDF==1.23.8  # 可选：用于更快的PDF裁剪（如果未安装，将自动使用pypdf）
-gunicorn==21.2.0  # 生产环境WSGI服务器
+gunicorn==21.2.0
