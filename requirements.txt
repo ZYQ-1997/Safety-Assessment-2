@@ -1,13 +1,6 @@
-# 核心框架（由 Streamlit Cloud 管理，建议不固定或用新版）
 streamlit>=1.31.0
-
-# PDF 处理（升级版本以适配新 Python）
 pdfplumber>=0.11.0
 pypdf>=4.0.0
 PyMuPDF>=1.24.0
-
-# 数据处理
-pandas>=2.2.0
+pandas>=2.1.4
 openpyxl>=3.1.2
-
-# 移除 Flask 和 Gunicorn，除非你确实在 Streamlit 内部通过多进程调用它们（不推荐）
