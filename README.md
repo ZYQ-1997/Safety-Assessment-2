@@ -1,6 +1,15 @@
+---
+title: PDF表格提取工具
+emoji: 📄
+colorFrom: blue
+colorTo: indigo
+sdk: docker
+app_port: 7860
+---
+
 # PDF表格提取工具
 
-一个简单易用的PDF表格提取工具，可以从长文本PDF文件（支持600页以上）中完整提取所有表格，并导出为Excel格式。
+一个简单易用的PDF表格提取工具，可以从长文本PDF文件（支持600页以上）中完整提取所有表格，并导出为 PDF/表格 结果。
 
 ## 功能特点
 

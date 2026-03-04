@@ -10,9 +10,8 @@ COPY backend ./backend
 COPY frontend ./frontend
 COPY extract_all_tables.py .
 
-# 启动时工作目录为项目根，以便 backend 内 ../frontend 路径正确
-ENV PORT=5000
-EXPOSE 5000
+# Hugging Face Spaces 默认端口 7860；本地可 -e PORT=5000
+ENV PORT=7860
+EXPOSE 7860
 
-# 云平台会注入 PORT；本地 docker run 时请 -e PORT=5000
-CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:${PORT:-5000} --workers 1 --threads 4 --timeout 300 backend.wsgi:application"]
+CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:${PORT:-7860} --workers 1 --threads 4 --timeout 300 backend.wsgi:application"]

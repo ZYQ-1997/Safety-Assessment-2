@@ -19,7 +19,7 @@ def main():
             '--workers', '1',
             '--threads', '4',
             '--timeout', '300',
-            'backend.wsgi:application'
+            'app:app'
         ], check=True)
     except FileNotFoundError:
         print('请先安装 gunicorn: pip install gunicorn')
