@@ -1,0 +1,19 @@
+# Streamlit Cloud 入口：streamlit run streamlit_app.py
+streamlit>=1.28.0
+
+# Web 框架（本地 Flask 可选）
+Flask==3.0.0
+flask-cors==4.0.0
+Werkzeug==3.0.1
+
+# PDF 处理（表格提取与裁剪）
+pdfplumber==0.10.3
+pypdf==3.17.0
+PyMuPDF==1.23.8
+
+# 数据处理与导出
+pandas==2.1.4
+openpyxl==3.1.2
+
+# 生产环境（Flask 部署用）
+gunicorn==21.2.0
