@@ -10,7 +10,8 @@ COPY backend ./backend
 COPY frontend ./frontend
 COPY extract_all_tables.py .
 
-# Hugging Face Spaces 默认端口 7860；本地可 -e PORT=5000
+# 生产环境：从项目根加载 backend 包
+ENV PYTHONPATH=/app
 ENV PORT=7860
 EXPOSE 7860
 

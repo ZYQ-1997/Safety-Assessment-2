@@ -30,12 +30,20 @@ pip install -r requirements.txt
 
 ### 2. 启动后端服务
 
+**本地开发：**
 ```bash
-cd backend
-python app.py
+python start_server.py
+# 或：cd backend && python app.py
 ```
 
-后端服务将在 `http://localhost:5000` 启动
+**生产环境（标准模式，推荐部署使用）：**
+```bash
+# 从项目根目录执行，端口由环境变量 PORT 控制
+python start_production.py
+# 或直接：PYTHONPATH=. gunicorn --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 300 backend.wsgi:application
+```
+
+服务将在 `http://0.0.0.0:5000`（或 `PORT` 指定端口）启动
 
 ### 3. 打开前端界面
 

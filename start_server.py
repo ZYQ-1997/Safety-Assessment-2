@@ -1,4 +1,7 @@
-"""启动后端服务器"""
+"""
+【仅限本地开发】启动后端服务器（Flask 开发服务器，debug=True）。
+生产部署请使用：python start_production.py 或 gunicorn backend.wsgi:application
+"""
 import os
 import sys
 
