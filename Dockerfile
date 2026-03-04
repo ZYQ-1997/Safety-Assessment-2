@@ -10,9 +10,9 @@ COPY backend ./backend
 COPY frontend ./frontend
 COPY extract_all_tables.py .
 
-# 生产环境：从项目根加载 backend 包
 ENV PYTHONPATH=/app
 ENV PORT=7860
 EXPOSE 7860
 
-CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:${PORT:-7860} --workers 1 --threads 4 --timeout 300 backend.wsgi:application"]
+# 标准生产入口：直接调用 gunicorn（PORT 由环境变量注入，默认 7860）
+CMD ["sh", "-c", "exec gunicorn --bind 0.0.0.0:${PORT:-7860} --workers 1 --threads 4 --timeout 300 backend.wsgi:application"]

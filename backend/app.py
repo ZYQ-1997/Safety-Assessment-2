@@ -12,8 +12,12 @@ import re
 from typing import List, Dict, Tuple, Optional
 
 # ---------------------------------------------------------------------------
-# 配置：优先从环境变量读取，无则使用默认值（与 ENV_VARS.md 表格一致）
+# 配置：环境变量 + 基于 __file__ 的路径（兼容 Windows/Linux 与任意工作目录）
 # ---------------------------------------------------------------------------
+_BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
+_PROJECT_ROOT = os.path.dirname(_BACKEND_DIR)
+FRONTEND_DIR = os.path.normpath(os.path.join(_BACKEND_DIR, "..", "frontend"))
+
 def _safe_path(value: str, default: str) -> str:
     """路径校验：禁止 '..' 与绝对路径。"""
     if not value or ".." in value or value.startswith("/") or re.match(r"^[A-Za-z]:", value):
@@ -26,8 +30,10 @@ PORT = int(_PORT) if str(_PORT).strip().isdigit() else 5000
 _DEBUG = (os.getenv("FLASK_DEBUG", "false") or "").strip().lower()
 FLASK_DEBUG = _DEBUG in ("1", "true", "yes")
 
-UPLOAD_FOLDER = _safe_path(os.getenv("UPLOAD_FOLDER", "uploads") or "uploads", "uploads")
-OUTPUT_FOLDER = _safe_path(os.getenv("OUTPUT_FOLDER", "outputs") or "outputs", "outputs")
+_upload_name = _safe_path(os.getenv("UPLOAD_FOLDER", "uploads") or "uploads", "uploads")
+_output_name = _safe_path(os.getenv("OUTPUT_FOLDER", "outputs") or "outputs", "outputs")
+UPLOAD_FOLDER = os.path.normpath(os.path.join(_PROJECT_ROOT, _upload_name))
+OUTPUT_FOLDER = os.path.normpath(os.path.join(_PROJECT_ROOT, _output_name))
 
 _MAX_MB = os.getenv("MAX_CONTENT_LENGTH_MB", "500")
 MAX_CONTENT_LENGTH_MB = int(_MAX_MB) if str(_MAX_MB).strip().isdigit() else 500
@@ -36,7 +42,7 @@ MAX_CONTENT_LENGTH = MAX_CONTENT_LENGTH_MB * 1024 * 1024
 
 # ---------------------------------------------------------------------------
 
-app = Flask(__name__, static_folder='../frontend', static_url_path='')
+app = Flask(__name__, static_folder=FRONTEND_DIR, static_url_path="")
 CORS(app, resources={r"/api/*": {"origins": "*"}})
 
 ALLOWED_EXTENSIONS = {'pdf'}
@@ -1647,10 +1653,10 @@ def test_extract_module():
             'traceback': traceback.format_exc()
         }), 500
 
-@app.route('/')
+@app.route("/")
 def index():
     """提供前端页面"""
-    return send_from_directory('../frontend', 'index.html')
+    return send_from_directory(FRONTEND_DIR, "index.html")
 
 if __name__ == '__main__':
     port = PORT
