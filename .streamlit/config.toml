@@ -1,0 +1,16 @@
+# Streamlit Cloud 部署配置
+[browser]
+gatherUsageStats = false
+
+[server]
+headless = true
+enableCORS = false
+enableXsrfProtection = true
+maxUploadSize = 500
+
+[theme]
+primaryColor = "#366092"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f0f2f6"
+textColor = "#262730"
+font = "sans serif"

@@ -12,8 +12,11 @@ ENV/
 # 上传和输出文件
 backend/uploads/
 backend/outputs/
+uploads/
+outputs/
 *.pdf
 *.xlsx
+*.docx
 
 # IDE
 .vscode/

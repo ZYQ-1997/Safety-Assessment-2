@@ -45,7 +45,7 @@ MAX_CONTENT_LENGTH = MAX_CONTENT_LENGTH_MB * 1024 * 1024
 app = Flask(__name__, static_folder=FRONTEND_DIR, static_url_path="")
 CORS(app, resources={r"/api/*": {"origins": "*"}})
 
-ALLOWED_EXTENSIONS = {'pdf'}
+ALLOWED_EXTENSIONS = {'pdf', 'docx'}
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
@@ -92,6 +92,50 @@ def handle_exception(e):
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+
+def _is_docx_by_magic(filepath: str) -> bool:
+    """通过文件头魔数判断是否为 Word (.docx) 文件（docx 实为 ZIP，头为 PK）"""
+    try:
+        with open(filepath, "rb") as f:
+            return f.read(2) == b"PK"
+    except Exception:
+        return False
+
+
+def word_remove_non_table_content(
+    docx_path: str,
+    output_path: str,
+    selected_table_ids: Optional[List[str]] = None,
+) -> int:
+    """
+    原样保留 Word 中所有表格，及每个表格上面的一行文字作为表名；删除其余内容。
+    表格不做任何处理，保留原文件状态。
+    selected_table_ids 若提供则只保留这些表格（及各自上一行表名），否则保留全部。
+    返回保留的表格数量。
+    """
+    from docx import Document
+    from docx.oxml.ns import qn
+
+    doc = Document(docx_path)
+    body = doc.element.body
+    tbl_tag = qn("w:tbl")
+    p_tag = qn("w:p")
+    children = list(body)
+    keep_indices = set()
+    table_index = 0
+    for i, child in enumerate(children):
+        if child.tag == tbl_tag:
+            if selected_table_ids is None or f"table_{table_index}" in selected_table_ids:
+                keep_indices.add(i)
+                if i > 0 and children[i - 1].tag == p_tag:
+                    keep_indices.add(i - 1)
+            table_index += 1
+    for i in range(len(children) - 1, -1, -1):
+        if i not in keep_indices:
+            body.remove(children[i])
+    doc.save(output_path)
+    return len([i for i in keep_indices if children[i].tag == tbl_tag])
 
 # 定义需要提取的表格（只提取表格，不提取文字）
 TARGET_SECTIONS = [
@@ -1260,6 +1304,262 @@ def save_content_to_excel(content_results: Dict, output_path: str) -> Dict:
     wb.save(output_path)
     return stats
 
+
+def save_content_to_docx(content_results: Dict, output_path: str) -> Dict:
+    """
+    将提取的表格内容保存为高保真 Word 文档（.docx）。
+    逻辑参考 save_content_to_excel：每个章节/表格块对应一个 Word 表格。
+    表格样式：Table Grid、表头浅灰加粗、等线/宋体 9 磅、居中对齐、宽度 100%。
+    """
+    from docx import Document
+    from docx.shared import Pt
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+    from docx.enum.table import WD_TABLE_ALIGNMENT
+
+    doc = Document()
+    # 全局默认字体：等线 9 磅（Normal 样式）
+    style = doc.styles['Normal']
+    style.font.name = '等线'
+    style.font.size = Pt(9)
+    try:
+        style._element.rPr.rFonts.set(qn('w:eastAsia'), '等线')
+    except Exception:
+        pass
+
+    stats = {
+        'total_sections': 0,
+        'found_sections': 0,
+        'total_tables': 0,
+    }
+
+    for section_name, section_data in content_results.items():
+        if not section_data.get('found', False):
+            continue
+        stats['found_sections'] += 1
+        tables = section_data.get('tables', [])
+        if not tables:
+            continue
+
+        for table_info in tables:
+            table_data = table_info.get('data', [])
+            if not table_data or len(table_data) < 1:
+                continue
+            stats['total_tables'] += 1
+
+            # 添加表名（表格标题），放在表格上方
+            title_para = doc.add_paragraph()
+            run = title_para.add_run(section_name)
+            run.bold = True
+            run.font.name = '等线'
+            run.font.size = Pt(10.5)
+            try:
+                run._element.rPr.rFonts.set(qn('w:eastAsia'), '等线')
+            except Exception:
+                pass
+            title_para.paragraph_format.space_after = Pt(6)
+
+            # 确定行数列数（以第一行长度为列数，不足的列补空）
+            num_rows = len(table_data)
+            num_cols = max(len(row) for row in table_data) if table_data else 0
+            if num_cols == 0:
+                continue
+            # 统一每行列数
+            for row in table_data:
+                while len(row) < num_cols:
+                    row.append('')
+
+            table = doc.add_table(rows=num_rows, cols=num_cols, style='Table Grid')
+            table.alignment = WD_TABLE_ALIGNMENT.CENTER
+
+            # 表格宽度设为页面可用宽度 100%
+            try:
+                section = doc.sections[0]
+                table_width = section.page_width - section.left_margin - section.right_margin
+                table.width = table_width
+            except Exception:
+                pass
+
+            for r_idx, row_data in enumerate(table_data):
+                row = table.rows[r_idx]
+                for c_idx, value in enumerate(row_data[:num_cols]):
+                    cell = row.cells[c_idx]
+                    # 文本还原，保留换行符 \n
+                    cell.text = str(value) if value is not None else ''
+                    # 单元格内容垂直居中
+                    tcPr = cell._tc.get_or_add_tcPr()
+                    vAlign = OxmlElement('w:vAlign')
+                    vAlign.set(qn('w:val'), 'center')
+                    tcPr.append(vAlign)
+                    # 字体与大小：等线/宋体 9 磅
+                    for para in cell.paragraphs:
+                        for run in para.runs:
+                            run.font.name = '等线'
+                            run.font.size = Pt(9)
+                            try:
+                                run._element.rPr.rFonts.set(qn('w:eastAsia'), '等线')
+                            except Exception:
+                                pass
+                    # 第一行作为表头：背景 D3D3D3，加粗
+                    if r_idx == 0:
+                        for run in cell.paragraphs[0].runs:
+                            run.bold = True
+                        shd = OxmlElement('w:shd')
+                        shd.set(qn('w:fill'), 'D3D3D3')
+                        cell._tc.get_or_add_tcPr().append(shd)
+
+            # 表格后留空
+            doc.add_paragraph()
+
+    stats['total_sections'] = len(content_results)
+    if stats['found_sections'] == 0:
+        doc.add_paragraph('未在PDF中找到指定的章节内容。')
+    doc.save(output_path)
+    return stats
+
+
+def _clean_cell_text(text: str) -> str:
+    """清洗单元格文本：仅保留 \\n 换行，去除 \\r、\\a 等不可见字符。"""
+    if not text or not isinstance(text, str):
+        return ""
+    s = text.replace("\r\n", "\n").replace("\r", "\n").replace("\a", "\n")
+    s = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", s)
+    return s.strip()
+
+
+def _normalize_docx_table_title(paragraph_text: Optional[str]) -> Optional[str]:
+    """
+    仅认可两种表格名称格式，用于 Word 输入时的表名提取：
+    （1）评价报告摘要
+    （2）表 x-y 文字（如：表 2-2 企业现有已投产项目各车间产品分布情况表）
+    若段落文本不符合这两种之一，返回 None（调用方用「表格 N」等占位）。
+    """
+    if not paragraph_text or not isinstance(paragraph_text, str):
+        return None
+    s = paragraph_text.strip()
+    if not s:
+        return None
+    if "评价报告摘要" in s:
+        return "评价报告摘要"
+    # 表 x-y 文字：表 + 数字 + 横线(-/－/–) + 数字 + 空格 + 文字（如：表 2-2 企业...）
+    m = re.match(r"^表\s*\d+\s*[-－–]\s*\d+\s+.+", s)
+    if m:
+        return s
+    m = re.search(r"表\s*\d+\s*[-－–]\s*\d+\s+.+", s)
+    if m:
+        return m.group(0).strip()
+    return None
+
+
+def _extract_table_grid_from_docx_table(table) -> List[List[str]]:
+    """
+    从 python-docx 的 Table 对象提取规整的「列表嵌套列表」矩阵。
+    合并单元格：按坐标 table.cell(row_idx, col_idx) 读取，合并区域仅在首个逻辑格保留文本，其余填空，保证列不错位。
+    清洗 \\r、\\a，仅保留 \\n。
+    """
+    try:
+        nrows = len(table.rows)
+        if nrows == 0:
+            return []
+        ncols = 0
+        try:
+            from docx.oxml.ns import qn
+            tbl = table._tbl
+            grid = getattr(tbl, "tblGrid", None) or (tbl.find(qn("w:tblGrid")) if hasattr(tbl, "find") else None)
+            if grid is not None and hasattr(grid, "findall"):
+                ncols = len(grid.findall(qn("w:gridCol")))
+        except Exception:
+            pass
+        if ncols <= 0:
+            for c in range(256):
+                try:
+                    table.cell(0, c)
+                    ncols = c + 1
+                except Exception:
+                    break
+        if ncols <= 0:
+            return []
+
+        seen_cell_ids = set()
+        grid_data = []
+        for r in range(nrows):
+            row_data = []
+            for c in range(ncols):
+                try:
+                    cell = table.cell(r, c)
+                    cell_id = id(cell)
+                    if cell_id not in seen_cell_ids:
+                        seen_cell_ids.add(cell_id)
+                        row_data.append(_clean_cell_text(cell.text))
+                    else:
+                        row_data.append("")
+                except Exception:
+                    row_data.append("")
+            grid_data.append(row_data)
+        return grid_data
+    except Exception:
+        return []
+
+
+def extract_tables_from_docx(docx_path: str) -> List[Dict]:
+    """
+    从 Word (.docx) 中提取所有表格，返回与 PDF 提取结果一致的 tables_data 结构。
+    每个元素: {'id': str, 'page': int, 'title': str, 'data': List[List[str]]}
+    合并单元格：仅在第一个逻辑单元格保留内容，其余填空，保证矩形矩阵、列不错位。
+    """
+    from docx import Document
+    from docx.oxml.ns import qn
+
+    tables_data = []
+    try:
+        doc = Document(docx_path)
+        body = doc.element.body
+        last_paragraph_text = None
+        table_index = 0
+        for child in body:
+            tag = child.tag if hasattr(child, "tag") else ""
+            if "tbl" in tag or child.tag == qn("w:tbl"):
+                # 仅保留两种表名：（1）评价报告摘要（2）表 x-y 文字；其他文字不作为表名
+                raw_title = (last_paragraph_text and last_paragraph_text.strip()) or None
+                title = _normalize_docx_table_title(raw_title) if raw_title else None
+                if title and len(title) > 120:
+                    title = title[:117] + "..."
+                if table_index < len(doc.tables):
+                    tbl = doc.tables[table_index]
+                    grid = _extract_table_grid_from_docx_table(tbl)
+                    if grid:
+                        tables_data.append({
+                            "id": f"table_{table_index}",
+                            "page": table_index,
+                            "title": title or f"表格{table_index + 1}",
+                            "data": grid,
+                        })
+                    table_index += 1
+            elif "p" in tag or child.tag == qn("w:p"):
+                try:
+                    t = "".join(n.text or "" for n in child.iter() if hasattr(n, "text"))
+                    if t and t.strip():
+                        last_paragraph_text = t.strip()
+                except Exception:
+                    pass
+        # 若 body 迭代与 doc.tables 顺序不一致，则退化为仅按 doc.tables 顺序提取
+        if table_index < len(doc.tables) and not tables_data:
+            for i, tbl in enumerate(doc.tables):
+                grid = _extract_table_grid_from_docx_table(tbl)
+                if grid:
+                    tables_data.append({
+                        "id": f"table_{i}",
+                        "page": i,
+                        "title": f"表格{i + 1}",
+                        "data": grid,
+                    })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise e
+    return tables_data
+
+
 @app.route('/api/upload', methods=['POST'])
 def upload_file():
     """处理文件上传"""
@@ -1272,7 +1572,7 @@ def upload_file():
         return jsonify({'error': '文件名为空'}), 400
     
     if not allowed_file(file.filename):
-        return jsonify({'error': '只支持PDF文件'}), 400
+        return jsonify({'error': '只支持 PDF 或 Word (.docx) 文件'}), 400
     
     try:
         # 保存上传的文件
@@ -1293,7 +1593,7 @@ def upload_file():
 
 @app.route('/api/tables', methods=['POST'])
 def get_tables_list():
-    """获取PDF中所有表格的列表"""
+    """获取 PDF 或 Word 中所有表格的列表"""
     data = request.get_json()
     
     if not data or 'filename' not in data:
@@ -1306,46 +1606,58 @@ def get_tables_list():
         return jsonify({'error': '文件不存在'}), 404
     
     try:
-        # 导入extract_all_tables模块
-        import sys
+        ext = (filename or "").rsplit(".", 1)[-1].lower()
+        is_word = (ext == "docx") or _is_docx_by_magic(filepath)
+        if is_word:
+            # Word：只统计表格个数，返回 table_0, table_1, ... 供勾选
+            from docx import Document
+            doc = Document(filepath)
+            n = len(doc.tables)
+            all_tables_info = [
+                {"id": f"table_{i}", "page_num": i, "name": f"表格{i + 1}", "table_num": i + 1}
+                for i in range(n)
+            ]
+            print(f"[调试] Word 获取到 {n} 个表格")
+            return jsonify({
+                'message': '成功获取表格列表',
+                'total_tables': n,
+                'display_tables': n,
+                'tables': all_tables_info
+            }), 200
+
+        # PDF：使用 extract_all_tables 模块
         import importlib.util
         from pathlib import Path
         
-        extract_script_path = Path(__file__).parent.parent / 'extract_all_tables.py'
+        extract_script_path = Path(__file__).resolve().parent.parent / 'extract_all_tables.py'
+        extract_script_str = os.path.normpath(str(extract_script_path))
         
-        if not extract_script_path.exists():
-            return jsonify({'error': f'提取脚本不存在: {extract_script_path}'}), 500
+        if not os.path.exists(extract_script_str):
+            return jsonify({'error': f'提取脚本不存在: {extract_script_str}'}), 500
         
-        spec = importlib.util.spec_from_file_location("extract_all_tables", extract_script_path)
+        spec = importlib.util.spec_from_file_location("extract_all_tables", extract_script_str)
         if spec is None or spec.loader is None:
             return jsonify({'error': '无法创建模块规范'}), 500
         
         extract_module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(extract_module)
         
-        # 检查函数是否存在
         if not hasattr(extract_module, 'get_all_tables_info'):
             return jsonify({'error': '模块中未找到 get_all_tables_info 函数'}), 500
         
-        # 调用函数获取表格列表
         all_tables_info = extract_module.get_all_tables_info(filepath)
         print(f"[调试] 获取到 {len(all_tables_info)} 个表格")
         
-        # 过滤表格列表，只显示有正式名称的表格（保留文档开头的"页码-表格编号"表格）
         if hasattr(extract_module, 'filter_tables_for_display'):
-            print(f"[调试] 调用 filter_tables_for_display 函数")
             filtered_tables = extract_module.filter_tables_for_display(all_tables_info)
-            print(f"[调试] 过滤后剩余 {len(filtered_tables)} 个表格")
         else:
-            # 如果没有过滤函数，使用全部表格
-            print(f"[调试] 警告: filter_tables_for_display 函数不存在，使用全部表格")
             filtered_tables = all_tables_info
         
         return jsonify({
             'message': '成功获取表格列表',
-            'total_tables': len(all_tables_info),  # 总表格数（包括截断部分）
-            'display_tables': len(filtered_tables),  # 显示给用户的表格数
-            'tables': filtered_tables  # 过滤后的表格列表（用于前端显示）
+            'total_tables': len(all_tables_info),
+            'display_tables': len(filtered_tables),
+            'tables': filtered_tables
         }), 200
     
     except Exception as e:
@@ -1361,7 +1673,7 @@ def get_tables_list():
 
 @app.route('/api/extract', methods=['POST'])
 def extract_tables():
-    """提取PDF中的表格（使用extract_all_tables.py的功能，支持选择表格）"""
+    """提取 PDF 或 Word 中的表格，统一输出为 Word (.docx)"""
     data = request.get_json()
     
     if not data or 'filename' not in data:
@@ -1370,35 +1682,73 @@ def extract_tables():
     filename = data['filename']
     filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
     
-    # 获取选择的表格ID列表（可选参数）
     selected_table_ids = data.get('selected_table_ids', None)
     
     if not os.path.exists(filepath):
         return jsonify({'error': '文件不存在'}), 404
     
     try:
-        # 导入extract_all_tables模块的功能
-        import sys
+        ext = (filename or "").rsplit(".", 1)[-1].lower()
+        is_word = (ext == "docx") or _is_docx_by_magic(filepath)
+        if is_word:
+            # ---------- Word 输入：仅删除表格外内容，表格原样保留 ----------
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            output_filename = f"all_tables_{timestamp}.docx"
+            if not output_filename.lower().endswith('.docx'):
+                output_filename = output_filename.rstrip('.') + '.docx'
+            final_output_path = os.path.join(app.config['OUTPUT_FOLDER'], output_filename)
+            os.makedirs(os.path.dirname(final_output_path), exist_ok=True)
+            try:
+                kept = word_remove_non_table_content(filepath, final_output_path, selected_table_ids)
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                return jsonify({
+                    'error': f'处理 Word 文档时出错: {str(e)}',
+                    'details': traceback.format_exc() if app.debug else None
+                }), 500
+            if kept == 0:
+                return jsonify({
+                    'error': '文档中无表格或未选中任何表格',
+                    'hint': '请确认 Word 文档中包含表格并勾选需要保留的表格'
+                }), 500
+            try:
+                if os.path.exists(filepath):
+                    os.remove(filepath)
+            except Exception:
+                pass
+            return jsonify({
+                'message': '已删除表格外内容，表格原样保留',
+                'total_tables': kept,
+                'total_pages': kept,
+                'output_filename': output_filename,
+                'download_url': f'/api/download/{output_filename}',
+                'file_type': 'docx',
+                'found_sections': kept,
+                'total_sections': kept
+            }), 200
+
+        # ---------- PDF 输入：使用 extract_all_tables 提取，统一输出 .docx ----------
         import importlib.util
         from pathlib import Path
         import shutil
         
-        # 加载extract_all_tables.py模块
-        extract_script_path = Path(__file__).parent.parent / 'extract_all_tables.py'
+        extract_script_path = Path(__file__).resolve().parent.parent / 'extract_all_tables.py'
+        extract_script_str = os.path.normpath(str(extract_script_path))
         
-        print(f"检查提取脚本路径: {extract_script_path}")
-        print(f"脚本是否存在: {extract_script_path.exists()}")
+        print(f"检查提取脚本路径: {extract_script_str}")
+        print(f"脚本是否存在: {os.path.exists(extract_script_str)}")
         
-        if not extract_script_path.exists():
-            error_msg = f'提取脚本不存在: {extract_script_path}'
+        if not os.path.exists(extract_script_str):
+            error_msg = f'提取脚本不存在: {extract_script_str}'
             print(f"错误: {error_msg}")
             return jsonify({'error': error_msg}), 500
         
         try:
-            print(f"正在加载模块: {extract_script_path}")
-            spec = importlib.util.spec_from_file_location("extract_all_tables", extract_script_path)
+            print(f"正在加载模块: {extract_script_str}")
+            spec = importlib.util.spec_from_file_location("extract_all_tables", extract_script_str)
             if spec is None or spec.loader is None:
-                error_msg = f'无法创建模块规范: {extract_script_path}'
+                error_msg = f'无法创建模块规范: {extract_script_str}'
                 print(f"错误: {error_msg}")
                 return jsonify({'error': error_msg}), 500
             
@@ -1421,26 +1771,25 @@ def extract_tables():
             print(f"详细错误:\n{error_trace}")
             return jsonify({'error': error_msg, 'details': error_trace if app.debug else None}), 500
         
-        # 调用提取函数，使用临时输出目录
+        # 仅提取表格数据并生成 Word，不生成 PDF
         temp_output_dir = os.path.join(app.config['OUTPUT_FOLDER'], 'temp_extracted')
         os.makedirs(temp_output_dir, exist_ok=True)
         
         print(f"=" * 60)
-        print(f"开始提取所有表格: {filename}")
+        print(f"开始提取所有表格（输出 Word）: {filename}")
         print(f"文件路径: {filepath}")
         print(f"输出目录: {temp_output_dir}")
         print(f"=" * 60)
         
-        print(f"准备调用 extract_all_tables_from_pdf")
+        print(f"准备调用 extract_all_tables_from_pdf(output_format='docx')")
         print(f"  PDF文件: {filepath}")
-        print(f"  输出目录: {temp_output_dir}")
         if selected_table_ids:
             print(f"  选择的表格ID: {selected_table_ids}")
         else:
             print(f"  提取所有表格")
         
         try:
-            result = extract_module.extract_all_tables_from_pdf(filepath, temp_output_dir, selected_table_ids)
+            result = extract_module.extract_all_tables_from_pdf(filepath, temp_output_dir, selected_table_ids, output_format='docx')
         except FileNotFoundError as e:
             # 文件不存在错误
             error_msg = f'PDF文件不存在: {str(e)}'
@@ -1493,38 +1842,39 @@ def extract_tables():
         print(f"提取函数返回结果: {type(result)}")
         print(f"结果键: {result.keys() if isinstance(result, dict) else 'N/A'}")
         
-        # 获取PDF输出文件路径
-        output_pdf = result.get('output_pdf')
-        if not output_pdf:
+        tables_data = result.get('tables_data', [])
+        if not tables_data:
             return jsonify({
-                'error': '提取结果中缺少PDF输出文件路径',
-                'hint': '提取函数应返回包含output_pdf字段的结果'
+                'error': '未提取到任何表格数据',
+                'hint': '请确认PDF中包含表格且提取函数返回了 tables_data'
             }), 500
         
-        if not os.path.exists(output_pdf):
-            return jsonify({
-                'error': f'PDF输出文件不存在: {output_pdf}',
-                'hint': '请检查提取函数是否正确生成了PDF文件'
-            }), 500
+        # 将 tables_data 转为 save_content_to_docx 所需的 content_results 结构
+        content_results = {}
+        for t in tables_data:
+            title = t.get('title') or t.get('id', '表格')
+            if title not in content_results:
+                content_results[title] = {'found': True, 'type': 'table', 'tables': []}
+            content_results[title]['tables'].append({'data': t.get('data', [])})
         
-        print(f"检测到PDF输出文件: {output_pdf}")
-        
-        # 将文件移动到outputs目录并重命名
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        output_filename = f"all_tables_{timestamp}.pdf"
+        output_filename = f"all_tables_{timestamp}.docx"
+        if not output_filename.lower().endswith('.docx'):
+            output_filename = output_filename.rstrip('.') + '.docx'
         final_output_path = os.path.join(app.config['OUTPUT_FOLDER'], output_filename)
-        
-        # 确保目标目录存在
         os.makedirs(os.path.dirname(final_output_path), exist_ok=True)
         
-        # 移动文件到最终输出目录
-        if os.path.abspath(output_pdf) != os.path.abspath(final_output_path):
-            shutil.move(output_pdf, final_output_path)
-            print(f"PDF文件已从 {output_pdf} 移动到 {final_output_path}")
-        else:
-            print(f"PDF文件已在目标位置: {final_output_path}")
+        try:
+            save_content_to_docx(content_results, final_output_path)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return jsonify({
+                'error': f'生成 Word 文档时出错: {str(e)}',
+                'details': traceback.format_exc() if app.debug else None
+            }), 500
         
-        print(f"PDF文件已保存到: {final_output_path}")
+        print(f"Word 文档已保存到: {final_output_path}")
         
         # 清理上传的文件
         try:
@@ -1535,18 +1885,18 @@ def extract_tables():
             print(f"清理上传文件时出错: {str(e)}")
         
         print(f"=" * 60)
-        print(f"提取完成: {result.get('total_tables', 0)} 个表格")
+        print(f"提取完成: {result.get('total_tables', 0)} 个表格，已生成 .docx")
         print(f"=" * 60)
         
         return jsonify({
-            'message': '表格提取成功（PDF格式）',
+            'message': '表格提取成功（Word 格式）',
             'total_tables': result.get('total_tables', 0),
             'total_pages': result.get('total_pages', 0),
             'output_filename': output_filename,
             'download_url': f'/api/download/{output_filename}',
-            'file_type': 'pdf',
-            'found_sections': result.get('total_tables', 0),  # 兼容前端
-            'total_sections': result.get('total_tables', 0)    # 兼容前端
+            'file_type': 'docx',
+            'found_sections': result.get('total_tables', 0),
+            'total_sections': result.get('total_tables', 0)
         }), 200
     
     except Exception as e:
@@ -1581,18 +1931,26 @@ def extract_tables():
 
 @app.route('/api/download/<filename>', methods=['GET'])
 def download_file(filename):
-    """下载提取结果PDF文件"""
+    """下载提取结果文件（支持 PDF 与 Word .docx）"""
+    # 禁止路径穿越
+    if '..' in filename or '/' in filename or '\\' in filename:
+        return jsonify({'error': '非法文件名'}), 400
     filepath = os.path.join(app.config['OUTPUT_FOLDER'], filename)
     
     if not os.path.exists(filepath):
         return jsonify({'error': '文件不存在'}), 404
+    
+    # 根据后缀设置 mimetype（本应用提取结果统一为 .docx）
+    mimetype = 'application/pdf'
+    if filename.lower().endswith('.docx'):
+        mimetype = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
     
     try:
         return send_file(
             filepath,
             as_attachment=True,
             download_name=filename,
-            mimetype='application/pdf'
+            mimetype=mimetype
         )
     except Exception as e:
         return jsonify({'error': f'下载文件时出错: {str(e)}'}), 500
@@ -1610,22 +1968,23 @@ def test_extract_module():
         import importlib.util
         from pathlib import Path
         
-        extract_script_path = Path(__file__).parent.parent / 'extract_all_tables.py'
+        extract_script_path = Path(__file__).resolve().parent.parent / 'extract_all_tables.py'
+        extract_script_str = os.path.normpath(str(extract_script_path))
         
         result = {
-            'script_path': str(extract_script_path),
-            'script_exists': extract_script_path.exists(),
+            'script_path': extract_script_str,
+            'script_exists': os.path.exists(extract_script_str),
             'module_loaded': False,
             'function_exists': False,
             'error': None
         }
         
-        if not extract_script_path.exists():
-            result['error'] = f'脚本不存在: {extract_script_path}'
+        if not os.path.exists(extract_script_str):
+            result['error'] = f'脚本不存在: {extract_script_str}'
             return jsonify(result), 200
         
         try:
-            spec = importlib.util.spec_from_file_location("extract_all_tables", extract_script_path)
+            spec = importlib.util.spec_from_file_location("extract_all_tables", extract_script_str)
             if spec is None or spec.loader is None:
                 result['error'] = '无法创建模块规范'
                 return jsonify(result), 200
@@ -1663,7 +2022,9 @@ if __name__ == '__main__':
     debug = app.config['DEBUG']
     print("=" * 50)
     print("PDF表格提取服务启动中...")
+    print("  >>> 提取结果将输出为 Word (.docx) 格式 <<<")
     print("=" * 50)
+    print(f"运行目录: {os.path.dirname(os.path.abspath(__file__))}")
     print(f"前端界面: http://0.0.0.0:{port}")
     print(f"API接口: http://0.0.0.0:{port}/api")
     print("=" * 50)

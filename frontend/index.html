@@ -339,13 +339,13 @@
 <body>
     <div class="container">
         <h1>📄 PDF表格提取工具</h1>
-        <p class="subtitle">支持提取PDF文件中的所有表格，并导出为PDF格式</p>
+        <p class="subtitle">支持提取 PDF / Word 中的表格，统一导出为 Word (.docx)</p>
 
         <div class="upload-area" id="uploadArea">
             <div class="upload-icon">📤</div>
-            <div class="upload-text">点击选择PDF文件或拖拽文件到此处</div>
-            <div class="upload-hint">支持最大500MB的PDF文件</div>
-            <input type="file" id="fileInput" accept=".pdf" />
+            <div class="upload-text">点击选择 PDF/Word 文件或拖拽到此处</div>
+            <div class="upload-hint">支持 .pdf、.docx，最大 500MB</div>
+            <input type="file" id="fileInput" accept=".pdf,.docx" />
         </div>
 
         <div class="file-info" id="fileInfo">
@@ -444,8 +444,8 @@
         });
 
         function handleFileSelect(file) {
-            if (!file.name.toLowerCase().endsWith('.pdf')) {
-                showError('请选择PDF文件');
+            if (!file.name.toLowerCase().endsWith('.pdf') && !file.name.toLowerCase().endsWith('.docx')) {
+                showError('请选择 PDF 或 Word (.docx) 文件');
                 return;
             }
 
@@ -715,6 +715,9 @@
                 if (data.total_pages) {
                     infoText += `（从 ${data.total_pages} 页PDF中提取）`;
                 }
+                if (data.file_type === 'docx') {
+                    infoText += '，已生成 Word 文档';
+                }
             } else if (data.found_sections !== undefined) {
                 infoText = `找到 ${data.found_sections}/${data.total_sections} 个章节`;
             if (data.total_tables > 0) {
@@ -727,7 +730,7 @@
             resultInfo.textContent = infoText;
             downloadBtn.href = `${API_BASE_URL}/download/${data.output_filename}`;
             downloadBtn.download = data.output_filename;
-            downloadBtn.textContent = '下载PDF文件';
+            downloadBtn.textContent = (data.file_type === 'docx') ? '下载 Word 文件' : '下载 PDF 文件';
             resultContainer.classList.add('show');
         }
 

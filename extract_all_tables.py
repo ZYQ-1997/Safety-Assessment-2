@@ -14,7 +14,7 @@ import logging
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict, Any
 
 # 尝试导入PyMuPDF (fitz)，如果失败则使用pypdf作为备选
 try:
@@ -94,55 +94,78 @@ def calculate_table_region(bbox: Tuple[float, float, float, float],
 
 def extract_table_name_from_page(page, table_bbox, table_data) -> Optional[str]:
     """
-    从PDF页面中提取表格名称
-    
-    参数:
-        page: pdfplumber页面对象
-        table_bbox: 表格的边界框 (x0, top, x1, bottom)
-        table_data: 表格数据（可选）
-    
-    返回:
-        表格名称（如果找到），否则返回None
+    从PDF页面中提取表格名称，支持：
+    （1）固定标题如：评价报告摘要
+    （2）表-数字-数字 名称 格式，如：表2-1 建设单位基本情况一览表（完整保留）
     """
     import re
-    
+
+    # 已知的固定表名/章节名（不含“表X-X”格式）
+    KNOWN_SECTION_TITLES = ['评价报告摘要']
+
     try:
         if table_bbox:
             x0, top, x1, bottom = table_bbox
-            # 提取表格上方的文本（向上查找80像素）
-            top_margin = 80
+            # 提取表格上方的文本（向上查找 120 像素，确保能覆盖表名）
+            top_margin = 120
             search_top = max(0, top - top_margin)
-            
-            # 获取表格上方的文本
             text_above = page.within_bbox((x0, search_top, x1, top)).extract_text()
-            
+
             if text_above:
-                # 按行分割文本
                 lines = [line.strip() for line in text_above.split('\n') if line.strip()]
-                
                 # 从下往上查找（最接近表格的文本更可能是表格名称）
                 for line in reversed(lines):
-                    # 跳过页码、页眉等
-                    if re.match(r'^\d+$', line) or len(line) < 3:
-                        continue
-                    
-                    # 清理行内容
                     line_clean = re.sub(r'\s+', ' ', line).strip()
-                    
-                    # 检查是否包含表格相关关键词
-                    table_keywords = ['表', '一览表', '清单', '明细', '统计表', '汇总表', '登记表', '记录表']
-                    if any(keyword in line_clean for keyword in table_keywords):
-                        # 提取表格名称（移除可能的编号前缀，如"表1-1"）
-                        name = re.sub(r'^表\s*\d+[-\s]*\d*\s*[：:]\s*', '', line_clean)
-                        name = re.sub(r'^表\s*\d+\s*[：:]\s*', '', name)
-                        name = name.strip()
-                        
-                        if 2 <= len(name) <= 50:
-                            return name
+                    if len(line_clean) < 2:
+                        continue
+                    # 跳过纯页码
+                    if re.match(r'^\d+$', line_clean):
+                        continue
+
+                    # （1）固定标题：评价报告摘要 等
+                    for known in KNOWN_SECTION_TITLES:
+                        if known in line_clean:
+                            return line_clean if len(line_clean) <= 80 else known
+
+                    # （2）表-数字-数字 名称（如：表2-1 建设单位基本情况一览表），完整保留
+                    if re.match(r'^表\s*\d+\s*[-－–]\s*\d+', line_clean):
+                        if 2 <= len(line_clean) <= 120:
+                            return line_clean
+
+                    # 兼容：表 数字-数字 或 表数字：名称
+                    if re.match(r'^表\s*\d+[-\s]*\d*\s*[：:]?\s*', line_clean):
+                        if 2 <= len(line_clean) <= 120:
+                            return line_clean
+
+                    # 其他：含表格相关关键词的行，保留整行作为表名
+                    table_keywords = ['一览表', '清单', '明细', '统计表', '汇总表', '登记表', '记录表', '情况表', '摘要']
+                    if any(kw in line_clean for kw in table_keywords) and 2 <= len(line_clean) <= 120:
+                        return line_clean
     except Exception:
         pass
-    
     return None
+
+
+def clean_table_data_for_export(table: List) -> List:
+    """
+    清理表格数据用于导出（保留换行符 \\n，None 转为空字符串）
+    """
+    if not table:
+        return []
+    cleaned = []
+    for row in table:
+        if row is None:
+            continue
+        cleaned_row = []
+        for cell in row:
+            if cell is None:
+                cleaned_row.append("")
+            else:
+                s = str(cell)
+                s = s.rstrip(" \t").lstrip(" \t") if s else ""
+                cleaned_row.append(s)
+        cleaned.append(cleaned_row)
+    return cleaned
 
 
 def is_formal_table_name(name: str) -> bool:
@@ -364,7 +387,54 @@ def merge_overlapping_regions(regions: List[Tuple[float, float, float, float]]) 
     return merged
 
 
-def extract_tables_as_pdf(pdf_path: str, output_path: Optional[str] = None, selected_table_ids: Optional[List[str]] = None) -> str:
+def get_tables_data_from_pdf(pdf_path: str, selected_table_ids: Optional[List[str]] = None) -> List[dict]:
+    """
+    仅从 PDF 中提取表格数据（不生成 PDF），用于导出 Word。
+    返回: [{'id': str, 'page': int, 'title': str, 'data': List[List[str]]}, ...]
+    """
+    if not os.path.exists(pdf_path):
+        raise FileNotFoundError(f"错误: 文件不存在: {pdf_path}")
+    
+    if selected_table_ids:
+        all_tables_info = get_all_tables_info(pdf_path)
+        expanded_table_ids = []
+        for table_id in selected_table_ids:
+            related_ids = get_related_table_ids(all_tables_info, table_id)
+            expanded_table_ids.extend(related_ids)
+        seen = set()
+        selected_table_ids = [tid for tid in expanded_table_ids if tid not in seen and not seen.add(tid)]
+    
+    tables_data = []
+    with pdfplumber.open(pdf_path) as pdf:
+        total_pages = len(pdf.pages)
+        for page_num, page in enumerate(pdf.pages, start=1):
+            table_objects = page.find_tables()
+            if not table_objects:
+                continue
+            page_width = page.width
+            page_height = page.height
+            for table_num, table_obj in enumerate(table_objects, start=1):
+                table_id = f"page_{page_num}_table_{table_num}"
+                if selected_table_ids is not None and table_id not in selected_table_ids:
+                    continue
+                bbox = table_obj.bbox
+                try:
+                    raw = table_obj.extract()
+                    if raw and len(raw) > 0:
+                        cleaned = clean_table_data_for_export(raw)
+                        title = extract_table_name_from_page(page, bbox, raw)
+                        tables_data.append({
+                            'id': table_id,
+                            'page': page_num,
+                            'title': title or table_id,
+                            'data': cleaned
+                        })
+                except Exception:
+                    pass
+    return tables_data
+
+
+def extract_tables_as_pdf(pdf_path: str, output_path: Optional[str] = None, selected_table_ids: Optional[List[str]] = None) -> Tuple[str, List[dict]]:
     """
     从PDF文件中提取表格区域，保存为新的PDF文件
     
@@ -376,7 +446,7 @@ def extract_tables_as_pdf(pdf_path: str, output_path: Optional[str] = None, sele
                            如果选择的是有正式名称的表格，会自动包含后续的"页码-表格编号"表格
     
     返回:
-        输出PDF文件的路径
+        (输出PDF文件路径, 表格数据列表)
     """
     if not os.path.exists(pdf_path):
         error_msg = f"错误: 文件不存在: {pdf_path}"
@@ -423,6 +493,7 @@ def extract_tables_as_pdf(pdf_path: str, output_path: Optional[str] = None, sele
     
     # 存储所有需要裁剪的页面和区域
     page_regions = {}  # {page_num: [(left, bottom, right, top), ...]}
+    tables_data = []   # 表格数据列表，用于导出 Word 等 [{id, page, title, data}, ...]
     
     # 使用pdfplumber识别表格位置
     try:
@@ -469,6 +540,21 @@ def extract_tables_as_pdf(pdf_path: str, output_path: Optional[str] = None, sele
                             margin_right=20
                         )
                         regions.append(crop_region)
+                        
+                        # 提取表格单元格数据（用于导出 Word）
+                        try:
+                            raw = table_obj.extract()
+                            if raw and len(raw) > 0:
+                                cleaned = clean_table_data_for_export(raw)
+                                title = extract_table_name_from_page(page, bbox, raw)
+                                tables_data.append({
+                                    'id': table_id,
+                                    'page': page_num,
+                                    'title': title or table_id,
+                                    'data': cleaned
+                                })
+                        except Exception:
+                            pass
                     
                     if page_selected_count > 0:
                         print(f"  第 {page_num} 页: 找到 {len(table_objects)} 个表格，选中 {page_selected_count} 个")
@@ -668,7 +754,7 @@ def extract_tables_as_pdf(pdf_path: str, output_path: Optional[str] = None, sele
         print(f"输出文件大小: {os.path.getsize(output_path) / 1024 / 1024:.2f} MB")
         print("=" * 60)
         
-        return str(output_path)
+        return (str(output_path), tables_data)
     
     except Exception as e:
         error_msg = f"裁剪PDF时发生错误: {str(e)}"
@@ -678,50 +764,53 @@ def extract_tables_as_pdf(pdf_path: str, output_path: Optional[str] = None, sele
         raise Exception(error_msg) from e
 
 
-def extract_all_tables_from_pdf(pdf_path: str, output_dir: str = "extracted_tables", selected_table_ids: Optional[List[str]] = None) -> dict:
+def extract_all_tables_from_pdf(pdf_path: str, output_dir: str = "extracted_tables", selected_table_ids: Optional[List[str]] = None, output_format: Optional[str] = None) -> dict:
     """
     向后兼容的函数，用于适配后端API
-    
-    这个函数调用新的 extract_tables_as_pdf 函数，但返回后端期望的格式
     
     参数:
         pdf_path: 输入PDF文件路径
         output_dir: 输出目录
         selected_table_ids: 要提取的表格ID列表（如果为None，则提取所有表格）
+        output_format: 'docx' 仅提取表格数据不生成PDF；'pdf' 或 None 生成PDF并提取表格数据
     
     返回:
-        包含提取结果的字典（适配后端API格式）
+        包含 total_pages, total_tables, output_dir, tables_data；
+        当 output_format != 'docx' 时还包含 output_pdf。
     """
     try:
-        # 生成输出PDF文件路径
-        pdf_name = Path(pdf_path).stem
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        output_pdf_path = os.path.join(output_dir, f"{pdf_name}_tables_{timestamp}.pdf")
-        
-        # 确保输出目录存在
-        os.makedirs(output_dir, exist_ok=True)
-        
-        # 调用新的PDF提取函数
-        result_pdf_path = extract_tables_as_pdf(pdf_path, output_pdf_path, selected_table_ids)
-        
-        # 读取PDF以获取页数
         with pdfplumber.open(pdf_path) as pdf:
             total_pages = len(pdf.pages)
         
-        # 读取输出PDF以获取页数（表格区域页数）
-        # 如果USE_PYMUPDF为False，PdfReader已在顶部导入；否则需要导入
+        if output_format == 'docx':
+            # 仅提取表格数据，不生成 PDF
+            tables_data = get_tables_data_from_pdf(pdf_path, selected_table_ids)
+            return {
+                'total_pages': total_pages,
+                'total_tables': len(tables_data),
+                'output_dir': output_dir,
+                'tables_data': tables_data
+            }
+        
+        # 生成 PDF 并提取表格数据
+        pdf_name = Path(pdf_path).stem
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        output_pdf_path = os.path.join(output_dir, f"{pdf_name}_tables_{timestamp}.pdf")
+        os.makedirs(output_dir, exist_ok=True)
+        
+        result_pdf_path, tables_data = extract_tables_as_pdf(pdf_path, output_pdf_path, selected_table_ids)
+        
         if USE_PYMUPDF:
             from pypdf import PdfReader
         output_reader = PdfReader(result_pdf_path, strict=False)
         total_output_pages = len(output_reader.pages)
         
-        # 返回后端期望的格式
         return {
             'total_pages': total_pages,
-            'total_tables': total_output_pages,  # 输出PDF的页数就是表格区域的数量
+            'total_tables': total_output_pages,
             'output_dir': output_dir,
-            'output_pdf': result_pdf_path,  # 新增：输出PDF文件路径
-            'tables_data': []  # 空列表，因为新功能不提取表格数据，只提取PDF区域
+            'output_pdf': result_pdf_path,
+            'tables_data': tables_data
         }
     except Exception as e:
         import traceback
@@ -745,7 +834,7 @@ def main():
         return
     
     try:
-        output_path = extract_tables_as_pdf(pdf_path)
+        output_path, _ = extract_tables_as_pdf(pdf_path)
         print(f"\n[成功] 成功提取表格区域并保存到: {output_path}")
     except Exception as e:
         print(f"\n[失败] 提取失败: {str(e)}")
