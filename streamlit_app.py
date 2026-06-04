@@ -115,95 +115,110 @@ def local_handle(uploaded_file):
     fname = uploaded_file.name or "upload"
     ext = fname.rsplit(".", 1)[-1].lower() if "." in fname else ""
     data = uploaded_file.getvalue()
+    file_id = uploaded_file.file_id
 
     if ext == "docx":
-        handle_docx_local(fname, data)
+        handle_docx_local(fname, data, file_id)
     elif ext == "pdf":
-        handle_pdf_local(fname, data)
+        handle_pdf_local(fname, data, file_id)
     else:
         st.error("仅支持 PDF 或 DOCX")
 
 
-def handle_docx_local(fname, data):
-    with tempfile.TemporaryDirectory() as td:
-        inpath = os.path.join(td, fname)
-        with open(inpath, "wb") as fh:
-            fh.write(data)
-        try:
+def handle_docx_local(fname, data, file_id):
+    cache_key = f"docx_groups_{file_id}"
+    if st.session_state.get(cache_key):
+        groups = st.session_state[cache_key]
+    else:
+        with tempfile.TemporaryDirectory() as td:
+            inpath = os.path.join(td, fname)
+            with open(inpath, "wb") as fh:
+                fh.write(data)
             with st.spinner("分析 Word 表格..."):
                 groups, _ = get_docx_table_groups(inpath)
-        except Exception as e:
-            st.error(f"读取失败: {e}")
-            return
-        if not groups:
-            st.warning("未发现表格")
-            return
-        st.success(f"识别到 {len(groups)} 个表格组")
-        opts, idmap = [], {}
-        for g in groups:
-            nm = g.get("name", "表格")
-            cnt = g.get("count", 1)
-            lb = f"{nm}（{cnt}个）" if cnt > 1 else nm
-            opts.append(lb)
-            idmap[lb] = g["id"]
-        sel = st.multiselect("选择表格（不选=全部）", opts, default=opts, key="docx_sel")
-        sids = [idmap[o] for o in sel] if sel else None
-        st.button("生成结果", key="docx_gen", on_click=do_docx_gen, args=(inpath, fname, sids))
+            st.session_state[cache_key] = groups
+            st.session_state["docx_path"] = inpath
 
-        if st.session_state.get("download_docx"):
-            out_path = st.session_state.get("download_docx")
-            with open(out_path, "rb") as fh:
-                st.download_button("下载 Word", fh.read(),
-                                   file_name=f"{Path(fname).stem}_提取结果.docx",
-                                   mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                                   key="docx_dl")
-            st.success(f"完成，保留 {st.session_state.get('docx_count', 0)} 个表格")
+    if not groups:
+        st.warning("未发现表格")
+        return
+    st.success(f"识别到 {len(groups)} 个表格组")
+    opts, idmap = [], {}
+    for g in groups:
+        nm = g.get("name", "表格")
+        cnt = g.get("count", 1)
+        lb = f"{nm}（{cnt}个）" if cnt > 1 else nm
+        opts.append(lb)
+        idmap[lb] = g["id"]
+    sel = st.multiselect("选择表格（不选=全部）", opts, default=opts, key="docx_sel")
+    sids = [idmap[o] for o in sel] if sel else None
+    st.button("生成结果", key="docx_gen", on_click=do_docx_gen, args=(data, fname, sids, file_id))
+
+    if st.session_state.get(f"download_docx_{file_id}"):
+        buf = st.session_state.get(f"download_docx_{file_id}")
+        st.download_button("下载 Word", buf,
+                           file_name=f"{Path(fname).stem}_提取结果.docx",
+                           mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                           key="docx_dl")
+        st.success(f"完成，保留 {st.session_state.get(f'docx_count_{file_id}', 0)} 个表格")
 
 
-def do_docx_gen(inpath, fname, sids):
+def do_docx_gen(data, fname, sids, file_id):
     try:
-        out = os.path.join(tempfile.gettempdir(), f"{uuid.uuid4().hex}.docx")
+        tmpd = tempfile.mkdtemp()
+        inpath = os.path.join(tmpd, fname)
+        with open(inpath, "wb") as fh:
+            fh.write(data)
+        out = os.path.join(tmpd, f"{uuid.uuid4().hex}.docx")
         n = word_remove_non_table(inpath, out, sids)
-        st.session_state.download_docx = out
-        st.session_state.docx_count = n
+        with open(out, "rb") as fh:
+            st.session_state[f"download_docx_{file_id}"] = fh.read()
+        st.session_state[f"docx_count_{file_id}"] = n
     except Exception as e:
         st.session_state.docx_error = str(e)
 
 
-def handle_pdf_local(fname, data):
-    with tempfile.TemporaryDirectory() as td:
-        pp = os.path.join(td, fname)
-        with open(pp, "wb") as fh:
-            fh.write(data)
-        try:
+def handle_pdf_local(fname, data, file_id):
+    cache_key = f"pdf_tables_{file_id}"
+    if st.session_state.get(cache_key):
+        disp = st.session_state[cache_key]
+    else:
+        with tempfile.TemporaryDirectory() as td:
+            pp = os.path.join(td, fname)
+            with open(pp, "wb") as fh:
+                fh.write(data)
             with st.spinner("识别 PDF 表格..."):
                 allt = get_all_tables_info(pp)
                 disp = filter_tables_for_display(allt)
-        except Exception as e:
-            st.error(f"识别失败: {e}")
-            return
-        if not disp:
-            st.warning("未发现表格")
-            return
-        st.success(f"识别到 {len(disp)} 个表格")
-        ol = [f"{t.get('name','')}（第{t.get('page','?')}页）" for t in disp]
-        o2i = {o: t["id"] for o, t in zip(ol, disp)}
-        sel = st.multiselect("选择表格（不选=全部）", ol, default=[], key="pdf_sel")
-        sids = [o2i[o] for o in sel] if sel else None
-        st.button("生成结果", key="pdf_gen", on_click=do_pdf_gen, args=(pp, fname, sids))
+            st.session_state[cache_key] = disp
+            st.session_state["pdf_path"] = pp
 
-        if st.session_state.get("download_pdf"):
-            buf = st.session_state.get("download_pdf")
-            st.download_button("下载 Word", buf,
-                               file_name=f"{Path(fname).stem}_提取结果.docx",
-                               mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                               key="pdf_dl")
-            st.success(f"完成，{st.session_state.get('pdf_count', 0)} 个表格")
+    if not disp:
+        st.warning("未发现表格")
+        return
+    st.success(f"识别到 {len(disp)} 个表格")
+    ol = [f"{t.get('name','')}（第{t.get('page','?')}页）" for t in disp]
+    o2i = {o: t["id"] for o, t in zip(ol, disp)}
+    sel = st.multiselect("选择表格（不选=全部）", ol, default=[], key="pdf_sel")
+    sids = [o2i[o] for o in sel] if sel else None
+    st.button("生成结果", key="pdf_gen", on_click=do_pdf_gen, args=(data, fname, sids, file_id))
+
+    if st.session_state.get(f"download_pdf_{file_id}"):
+        buf = st.session_state.get(f"download_pdf_{file_id}")
+        st.download_button("下载 Word", buf,
+                           file_name=f"{Path(fname).stem}_提取结果.docx",
+                           mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                           key="pdf_dl")
+        st.success(f"完成，{st.session_state.get(f'pdf_count_{file_id}', 0)} 个表格")
 
 
-def do_pdf_gen(pp, fname, sids):
+def do_pdf_gen(data, fname, sids, file_id):
     try:
-        od = os.path.join(tempfile.gettempdir(), uuid.uuid4().hex)
+        tmpd = tempfile.mkdtemp()
+        pp = os.path.join(tmpd, fname)
+        with open(pp, "wb") as fh:
+            fh.write(data)
+        od = os.path.join(tmpd, "out")
         os.makedirs(od, exist_ok=True)
         r = extract_all_tables_from_pdf(pp, od, sids, output_format="docx")
         td2 = r.get("tables_data", []) if isinstance(r, dict) else []
@@ -211,8 +226,8 @@ def do_pdf_gen(pp, fname, sids):
             st.session_state.pdf_error = "未提取到表格"
             return
         buf = build_docx(td2)
-        st.session_state.download_pdf = buf
-        st.session_state.pdf_count = len(td2)
+        st.session_state[f"download_pdf_{file_id}"] = buf
+        st.session_state[f"pdf_count_{file_id}"] = len(td2)
     except Exception as e:
         st.session_state.pdf_error = str(e)
 
