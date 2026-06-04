@@ -1,5 +1,5 @@
 """
-安全评估数据平台 - Streamlit 版
+长文本数据提取平台 - Streamlit 版
 """
 import os, sys, tempfile, json, io, uuid, re
 from typing import Optional
@@ -23,7 +23,7 @@ from extract_all_tables import (
 LOGIN_USER = os.getenv("LOGIN_USERNAME", "admin")
 LOGIN_PASS = os.getenv("LOGIN_PASSWORD", "admin123")
 
-st.set_page_config(page_title="安全评估数据平台", page_icon="📊", layout="centered")
+st.set_page_config(page_title="长文本数据提取平台", page_icon="📊", layout="centered")
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 if "page" not in st.session_state:
@@ -43,7 +43,7 @@ def go_tool():
 # 登录页
 # ==========================================================================
 def show_login():
-    st.title("安全评估数据平台")
+    st.title("长文本数据提取平台")
     st.caption("请登录以使用系统功能")
     u = st.text_input("用户名", key="login_u")
     p = st.text_input("密码", type="password", key="login_p")
@@ -152,7 +152,13 @@ def handle_docx_local(fname, data, file_id):
         idmap[lb] = g["id"]
     sel = st.multiselect("选择表格（不选=全部）", opts, default=opts, key="docx_sel")
     sids = [idmap[o] for o in sel] if sel else None
-    st.button("生成结果", key="docx_gen", on_click=do_docx_gen, args=(data, fname, sids, file_id))
+    st.button("生成结果", key="docx_gen", on_click=lambda: st.session_state.__setitem__("do_docx_process", True))
+
+    if st.session_state.get("do_docx_process"):
+        with st.spinner("正在生成 Word..."):
+            do_docx_process(data, fname, sids, file_id)
+        st.session_state.do_docx_process = False
+        st.rerun()
 
     if st.session_state.get(f"download_docx_{file_id}"):
         buf = st.session_state.get(f"download_docx_{file_id}")
@@ -163,7 +169,7 @@ def handle_docx_local(fname, data, file_id):
         st.success(f"完成，保留 {st.session_state.get(f'docx_count_{file_id}', 0)} 个表格")
 
 
-def do_docx_gen(data, fname, sids, file_id):
+def do_docx_process(data, fname, sids, file_id):
     try:
         tmpd = tempfile.mkdtemp()
         inpath = os.path.join(tmpd, fname)
@@ -201,7 +207,13 @@ def handle_pdf_local(fname, data, file_id):
     o2i = {o: t["id"] for o, t in zip(ol, disp)}
     sel = st.multiselect("选择表格（不选=全部）", ol, default=[], key="pdf_sel")
     sids = [o2i[o] for o in sel] if sel else None
-    st.button("生成结果", key="pdf_gen", on_click=do_pdf_gen, args=(data, fname, sids, file_id))
+    st.button("生成结果", key="pdf_gen", on_click=lambda: st.session_state.__setitem__("do_pdf_process", True))
+
+    if st.session_state.get("do_pdf_process"):
+        with st.spinner("正在提取表格并生成 Word..."):
+            do_pdf_process(data, fname, sids, file_id)
+        st.session_state.do_pdf_process = False
+        st.rerun()
 
     if st.session_state.get(f"download_pdf_{file_id}"):
         buf = st.session_state.get(f"download_pdf_{file_id}")
@@ -212,7 +224,7 @@ def handle_pdf_local(fname, data, file_id):
         st.success(f"完成，{st.session_state.get(f'pdf_count_{file_id}', 0)} 个表格")
 
 
-def do_pdf_gen(data, fname, sids, file_id):
+def do_pdf_process(data, fname, sids, file_id):
     try:
         tmpd = tempfile.mkdtemp()
         pp = os.path.join(tmpd, fname)
@@ -276,7 +288,13 @@ def api_handle(uploaded_file, base_url):
     o2i = {o: t["id"] for o, t in zip(ol, tabs)}
     sel = st.multiselect("选择表格（不选=全部）", ol, default=[], key="api_sel")
     sids = [o2i[o] for o in sel] if sel else None
-    st.button("提取", key="api_gen", on_click=do_api_gen, args=(base, bfn, sids))
+    st.button("提取", key="api_gen", on_click=lambda: st.session_state.__setitem__("do_api_process", True))
+
+    if st.session_state.get("do_api_process"):
+        with st.spinner("正在提取..."):
+            do_api_process(base, bfn, sids)
+        st.session_state.do_api_process = False
+        st.rerun()
 
     if st.session_state.get("download_api"):
         out = st.session_state.get("download_api")
@@ -290,7 +308,7 @@ def api_handle(uploaded_file, base_url):
         st.session_state.api_error = None
 
 
-def do_api_gen(base, bfn, sids):
+def do_api_process(base, bfn, sids):
     try:
         pld = {"filename": bfn}
         if sids is not None:
@@ -495,7 +513,7 @@ else:
     # 顶部栏
     c_top_l, c_top_r = st.columns([8, 1])
     with c_top_l:
-        st.caption(f"安全评估数据平台  |  当前用户: {st.session_state.get('username', 'admin')}")
+        st.caption(f"长文本数据提取平台  |  当前用户: {st.session_state.get('username', 'admin')}")
     with c_top_r:
         st.button("退出", key="top_logout", on_click=do_logout)
 
