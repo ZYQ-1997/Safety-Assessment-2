@@ -24,7 +24,10 @@ LOGIN_USER = os.getenv("LOGIN_USERNAME", "admin")
 LOGIN_PASS = os.getenv("LOGIN_PASSWORD", "admin123")
 
 st.set_page_config(page_title="安全评估数据平台", page_icon="📊", layout="centered")
-
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+if "page" not in st.session_state:
+    st.session_state.page = "login"
 def do_logout():
     st.session_state.logged_in = False
     st.session_state.page = "login"
