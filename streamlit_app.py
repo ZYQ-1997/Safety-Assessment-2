@@ -51,52 +51,75 @@ def do_logout():
     st.session_state.page = "login"
 
 
+def go_workbench():
+    st.session_state.page = "workbench"
+
+
+def go_tool():
+    st.session_state.page = "tool"
+
+
 # ============================ 登录页 ============================
 def login_page():
-    st.markdown("<br><br>", unsafe_allow_html=True)
-    col1, col2, col3 = st.columns([1, 2, 1])
+    st.markdown("<br>", unsafe_allow_html=True)
+    _, col2, _ = st.columns([1, 2, 1])
     with col2:
-        st.markdown("### 🔐 安全评估数据平台")
+        st.markdown("### 安全评估数据平台")
         st.caption("请登录以使用系统功能")
-        username = st.text_input("用户名", key="login_user")
-        password = st.text_input("密码", type="password", key="login_pass")
-        if st.button("登 录", use_container_width=True, type="primary"):
+        username = st.text_input("用户名", key="login_username")
+        password = st.text_input("密码", type="password", key="login_password")
+
+        def try_login():
             if username == LOGIN_USER and password == LOGIN_PASS:
                 st.session_state.logged_in = True
                 st.session_state.username = username
                 st.session_state.page = "workbench"
-                st.rerun()
             else:
-                st.error("用户名或密码错误")
+                st.session_state.login_error = True
+
+        if "login_error" in st.session_state and st.session_state.login_error:
+            st.error("用户名或密码错误")
+
+        st.button("登 录", key="login_btn", use_container_width=True, type="primary", on_click=try_login)
 
 
 # ============================ 工作台 ============================
 def workbench_page():
-    st.markdown("### 📊 工作台")
+    st.markdown("### 工作台")
     st.caption("选择工具开始处理报告数据")
     st.markdown("---")
 
     col1, col2, col3 = st.columns(3)
 
     with col1:
-        with st.container(border=True):
-            st.markdown("##### 📄 安评报告智能提取")
-            st.caption("上传安全评价报告（PDF/Word），智能识别并提取表格数据，导出为 Word 文档")
-            if st.button("开始使用", key="btn_safety", use_container_width=True, type="primary"):
-                st.session_state.page = "tool"
-                st.rerun()
+        st.markdown(
+            """<div style="background:#f0f4ff;border-radius:12px;padding:20px;min-height:220px">
+            <h4>安评报告智能提取</h4>
+            <p style="color:#666;font-size:14px">上传安全评价报告（PDF/Word），智能识别并提取表格数据，导出为 Word 文档</p>
+            </div>""",
+            unsafe_allow_html=True,
+        )
+        st.button("开始使用", key="btn_safety", use_container_width=True, type="primary", on_click=go_tool)
 
     with col2:
-        with st.container(border=True):
-            st.markdown("##### 🌿 环评报告智能提取")
-            st.caption("上传环境影响评价报告，智能识别并提取关键数据表格")
-            st.button("开发中", key="btn_env", use_container_width=True, disabled=True)
+        st.markdown(
+            """<div style="background:#f0f4ff;border-radius:12px;padding:20px;min-height:220px;opacity:0.6">
+            <h4>环评报告智能提取</h4>
+            <p style="color:#666;font-size:14px">上传环境影响评价报告，智能识别并提取关键数据表格</p>
+            </div>""",
+            unsafe_allow_html=True,
+        )
+        st.button("开发中", key="btn_env", use_container_width=True, disabled=True)
 
     with col3:
-        with st.container(border=True):
-            st.markdown("##### 🗺️ 总体规划智能提取")
-            st.caption("上传总体规划文档，智能识别并提取规划关键信息")
-            st.button("开发中", key="btn_plan", use_container_width=True, disabled=True)
+        st.markdown(
+            """<div style="background:#f0f4ff;border-radius:12px;padding:20px;min-height:220px;opacity:0.6">
+            <h4>总体规划智能提取</h4>
+            <p style="color:#666;font-size:14px">上传总体规划文档，智能识别并提取规划关键信息</p>
+            </div>""",
+            unsafe_allow_html=True,
+        )
+        st.button("开发中", key="btn_plan", use_container_width=True, disabled=True)
 
 
 # ============================ 工具页 ============================
@@ -166,8 +189,7 @@ def _local_process(filename, ext, file_bytes):
             selected = st.multiselect("选择要保留的表格（不选则保留全部）", options, default=options)
             selected_ids = [option_to_id[o] for o in selected] if selected else None
 
-            if st.button("生成 Word（.docx）", type="primary"):
-                out_path = os.path.join(tmpdir, f"{Path(filename).stem}_tables_only.docx")
+            if st.button("生成 Word（.docx）", key="gen_docx_word", type="primary"):
                 try:
                     with st.spinner("正在生成 Word..."):
                         kept = word_remove_non_table_content(in_path, out_path, selected_ids)
@@ -207,7 +229,7 @@ def _local_process(filename, ext, file_bytes):
             selected = st.multiselect("选择要提取的表格（不选则提取全部）", opts, default=[])
             selected_ids = [opt2id[o] for o in selected] if selected else None
 
-            if st.button("生成 Word（.docx）", type="primary"):
+            if st.button("生成 Word（.docx）", key="gen_pdf_word", type="primary"):
                 out_dir = os.path.join(tmpdir, "output")
                 os.makedirs(out_dir, exist_ok=True)
                 try:
@@ -273,7 +295,7 @@ def _api_process(filename, ext, file_bytes, api_base, api_timeout):
     o2id = {o: t["id"] for t, o in zip(tables, ops)}
     sel = st.multiselect("选择要提取的表格（不选则提取全部）", ops, default=[])
     selected = [o2id[o] for o in sel] if sel else None
-    if st.button("提取并生成 Word", type="primary"):
+    if st.button("提取并生成 Word", key="api_extract_btn", type="primary"):
         try:
             with st.spinner("后端正在提取..."):
                 payload = {"filename": backend_fn}
@@ -531,9 +553,7 @@ elif st.session_state.page == "workbench":
     with col_l:
         st.caption("安全评估数据平台")
     with col_r:
-        if st.button("退出", key="logout_btn", use_container_width=True):
-            do_logout()
-            st.rerun()
+        st.button("退出", key="logout_btn", use_container_width=True, on_click=do_logout)
     workbench_page()
 else:
     # tool 页
@@ -541,12 +561,8 @@ else:
     with col_l:
         st.caption("安评报告智能提取")
     with col_r:
-        if st.button("退出", key="logout_btn2", use_container_width=True):
-            do_logout()
-            st.rerun()
+        st.button("退出", key="logout_btn2", use_container_width=True, on_click=do_logout)
     col_back, _ = st.columns([1, 6])
     with col_back:
-        if st.button("← 返回工作台", key="back_btn"):
-            st.session_state.page = "workbench"
-            st.rerun()
+        st.button("← 返回工作台", key="back_btn", on_click=go_workbench)
     tool_page()
