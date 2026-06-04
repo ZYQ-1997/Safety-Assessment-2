@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>工作台</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Microsoft YaHei', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #f0f2f5;
+            min-height: 100vh;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+            padding: 16px 32px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+        }
+
+        .header-title {
+            color: white;
+            font-size: 18px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .header-title .icon {
+            font-size: 24px;
+        }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .header-user {
+            color: #aab;
+            font-size: 14px;
+        }
+
+        .btn-logout {
+            padding: 6px 20px;
+            border: 1px solid rgba(255,255,255,0.3);
+            border-radius: 6px;
+            background: transparent;
+            color: white;
+            font-size: 13px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .btn-logout:hover {
+            background: rgba(255,255,255,0.1);
+            border-color: rgba(255,255,255,0.6);
+        }
+
+        .main-content {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 40px 24px;
+        }
+
+        .welcome-section {
+            margin-bottom: 36px;
+        }
+
+        .welcome-title {
+            font-size: 24px;
+            color: #1a1a2e;
+            margin-bottom: 6px;
+        }
+
+        .welcome-subtitle {
+            font-size: 14px;
+            color: #888;
+        }
+
+        .cards-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 24px;
+        }
+
+        .card {
+            background: white;
+            border-radius: 16px;
+            padding: 36px 28px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            border: 2px solid transparent;
+            box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
+            text-decoration: none;
+            display: block;
+        }
+
+        .card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.12);
+        }
+
+        .card.active:hover {
+            border-color: #667eea;
+        }
+
+        .card.disabled {
+            cursor: not-allowed;
+            opacity: 0.6;
+            filter: grayscale(30%);
+        }
+
+        .card.disabled:hover {
+            transform: none;
+            box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
+            border-color: transparent;
+        }
+
+        .card-icon {
+            width: 80px;
+            height: 80px;
+            border-radius: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 20px;
+            font-size: 36px;
+        }
+
+        .card-icon.safety {
+            background: linear-gradient(135deg, #e8f4fd 0%, #d4eafc 100%);
+        }
+
+        .card-icon.env {
+            background: linear-gradient(135deg, #e6f9f0 0%, #d0f4de 100%);
+        }
+
+        .card-icon.planning {
+            background: linear-gradient(135deg, #fef3e2 0%, #fde8c8 100%);
+        }
+
+        .card-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: #1a1a2e;
+            margin-bottom: 10px;
+        }
+
+        .card-desc {
+            font-size: 13px;
+            color: #999;
+            line-height: 1.6;
+        }
+
+        .card-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 500;
+            margin-top: 14px;
+        }
+
+        .badge-ready {
+            background: #e6f9f0;
+            color: #2e7d32;
+        }
+
+        .badge-pending {
+            background: #fff3e0;
+            color: #e65100;
+        }
+
+        @media (max-width: 900px) {
+            .cards-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-title">
+            <span class="icon">📊</span>
+            <span>长文本数据提取平台</span>
+        </div>
+        <div class="header-right">
+            <span class="header-user" id="headerUser">欢迎</span>
+            <button class="btn-logout" id="logoutBtn">退出登录</button>
+        </div>
+    </div>
+
+    <div class="main-content">
+        <div class="welcome-section">
+            <h1 class="welcome-title">工作台</h1>
+            <p class="welcome-subtitle">选择工具开始处理报告数据</p>
+        </div>
+
+        <div class="cards-grid">
+            <a href="/tool" class="card active">
+                <div class="card-icon safety">📄</div>
+                <div class="card-title">安评报告智能提取</div>
+                <div class="card-desc">上传安全评价报告（PDF/Word），智能识别并提取表格数据，导出为 Word 文档</div>
+                <span class="card-badge badge-ready">可用</span>
+            </a>
+
+            <div class="card disabled">
+                <div class="card-icon env">🌿</div>
+                <div class="card-title">环评报告智能提取</div>
+                <div class="card-desc">上传环境影响评价报告，智能识别并提取关键数据表格</div>
+                <span class="card-badge badge-pending">开发中</span>
+            </div>
+
+            <div class="card disabled">
+                <div class="card-icon planning">🗺️</div>
+                <div class="card-title">总体规划智能提取</div>
+                <div class="card-desc">上传总体规划文档，智能识别并提取规划关键信息</div>
+                <span class="card-badge badge-pending">开发中</span>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE_URL = window.location.protocol === 'file:' ? 'http://localhost:5000/api' : '/api';
+
+        (async function init() {
+            try {
+                const response = await fetch(`${API_BASE_URL}/check-session`);
+                const data = await response.json();
+                if (data.logged_in) {
+                    document.getElementById('headerUser').textContent = `欢迎，${data.username}`;
+                } else {
+                    window.location.href = '/login';
+                }
+            } catch (e) {
+                window.location.href = '/login';
+            }
+        })();
+
+        document.getElementById('logoutBtn').addEventListener('click', async () => {
+            try {
+                await fetch(`${API_BASE_URL}/logout`, { method: 'POST' });
+            } catch (e) {}
+            window.location.href = '/login';
+        });
+    </script>
+</body>
+</html>

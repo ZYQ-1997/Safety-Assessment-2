@@ -16,7 +16,6 @@ uploads/
 outputs/
 *.pdf
 *.xlsx
-*.docx
 
 # IDE
 .vscode/

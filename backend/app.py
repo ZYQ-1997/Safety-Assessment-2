@@ -1,5 +1,6 @@
-from flask import Flask, request, jsonify, send_file, send_from_directory
+from flask import Flask, request, jsonify, send_file, send_from_directory, session, redirect, url_for
 from flask_cors import CORS
+from functools import wraps
 import pdfplumber
 import pandas as pd
 import os
@@ -54,6 +55,24 @@ app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['OUTPUT_FOLDER'] = OUTPUT_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = MAX_CONTENT_LENGTH
 app.config['DEBUG'] = FLASK_DEBUG
+
+# ---------------------------------------------------------------------------
+# 认证配置
+# ---------------------------------------------------------------------------
+app.secret_key = os.getenv("FLASK_SECRET_KEY", "safety-assessment-secret-key-2024")
+LOGIN_USERNAME = os.getenv("LOGIN_USERNAME", "admin")
+LOGIN_PASSWORD = os.getenv("LOGIN_PASSWORD", "admin123")
+
+def login_required(f):
+    """登录验证装饰器：API 返回 JSON 403，页面路由重定向到 /login"""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not session.get('logged_in'):
+            if request.path.startswith('/api/'):
+                return jsonify({'error': '未登录，请先登录', 'redirect': '/login'}), 401
+            return redirect(url_for('login_page'))
+        return f(*args, **kwargs)
+    return decorated_function
 
 # 添加全局错误处理器，确保所有错误都返回JSON格式
 @app.errorhandler(404)
@@ -1451,6 +1470,112 @@ def _normalize_docx_table_title(paragraph_text: Optional[str]) -> Optional[str]:
     return None
 
 
+def _clean_docx_title_line(paragraph_text: Optional[str]) -> Optional[str]:
+    """从段落文本中提取“上一行表名”：清洗不可见字符，仅取第一条非空行。"""
+    if not paragraph_text or not isinstance(paragraph_text, str):
+        return None
+    s = _clean_cell_text(paragraph_text)
+    if not s:
+        return None
+    for line in s.split("\n"):
+        t = re.sub(r"\s+", " ", (line or "").strip())
+        if t:
+            return t
+    return None
+
+
+def _dedupe_title_text(title: str) -> str:
+    """去掉表名中重复内容（整段重复/连续重复 token），用于前端展示。"""
+    if not title or not isinstance(title, str):
+        return ""
+    s = re.sub(r"\s+", " ", title).strip()
+    if not s:
+        return ""
+    # 整段重复（如 “X X” 或 “X   X”）
+    m = re.match(r"^(.+?)(?:\s+\1)+$", s)
+    if m:
+        s = m.group(1).strip()
+    # token 级去重（连续重复）
+    tokens = s.split(" ")
+    out = []
+    prev = None
+    for tok in tokens:
+        if tok and tok != prev:
+            out.append(tok)
+        prev = tok
+    # 半段重复（token 序列前半 == 后半）
+    if len(out) % 2 == 0 and out[: len(out) // 2] == out[len(out) // 2 :]:
+        out = out[: len(out) // 2]
+    return " ".join(out).strip()
+
+
+def _get_docx_table_groups(docx_path: str):
+    """
+    从 Word 正文中获取表格分组（按表名去重），并返回 table_id -> 同组所有 table_id 的映射。
+    表名取每个表格正上方的一行段落文字（清洗、去重后），为空则回退为“表格N”。
+    """
+    from docx import Document
+    from docx.oxml.ns import qn
+
+    doc = Document(docx_path)
+    body = doc.element.body
+    p_tag = qn("w:p")
+    tbl_tag = qn("w:tbl")
+
+    last_para_text = None
+    groups_by_name = {}  # name -> group dict
+    groups_in_order = []
+    table_index = 0
+
+    for child in body:
+        if child.tag == p_tag:
+            try:
+                t = "".join((n.text or "") for n in child.iter() if hasattr(n, "text"))
+                t = (t or "").strip()
+                if t:
+                    last_para_text = t
+            except Exception:
+                pass
+            continue
+
+        if child.tag != tbl_tag:
+            continue
+
+        table_id = f"table_{table_index}"
+        raw_title = _clean_docx_title_line(last_para_text)
+        # 优先使用规范化标题，否则使用原始上一行（两者都做重复清理）
+        norm = _normalize_docx_table_title(raw_title) if raw_title else None
+        name = _dedupe_title_text(norm or raw_title or f"表格{table_index + 1}")
+
+        if name not in groups_by_name:
+            group = {
+                "id": table_id,  # 代表 id（前端勾选用）
+                "name": name,
+                "page": table_index + 1,  # Word 无页码，用序号占位避免 undefined
+                "table_num": len(groups_in_order) + 1,
+                "table_ids": [table_id],
+                "count": 1,
+            }
+            groups_by_name[name] = group
+            groups_in_order.append(group)
+        else:
+            group = groups_by_name[name]
+            group["table_ids"].append(table_id)
+            group["count"] += 1
+
+        table_index += 1
+
+    id_to_group_ids = {}
+    for group in groups_in_order:
+        ids = group.get("table_ids", [])
+        for tid in ids:
+            id_to_group_ids[tid] = ids
+        # 代表 id 也映射到整组
+        id_to_group_ids[group["id"]] = ids
+
+    return groups_in_order, id_to_group_ids
+
+
 def _extract_table_grid_from_docx_table(table) -> List[List[str]]:
     """
     从 python-docx 的 Table 对象提取规整的「列表嵌套列表」矩阵。
@@ -1560,7 +1685,58 @@ def extract_tables_from_docx(docx_path: str) -> List[Dict]:
     return tables_data
 
 
+# ---------------------------------------------------------------------------
+# 认证相关路由
+# ---------------------------------------------------------------------------
+@app.route('/api/login', methods=['POST'])
+def api_login():
+    """登录接口"""
+    data = request.get_json()
+    if not data:
+        return jsonify({'error': '请提供登录信息'}), 400
+    username = data.get('username', '')
+    password = data.get('password', '')
+    if username == LOGIN_USERNAME and password == LOGIN_PASSWORD:
+        session['logged_in'] = True
+        session['username'] = username
+        return jsonify({'message': '登录成功', 'username': username}), 200
+    return jsonify({'error': '用户名或密码错误'}), 401
+
+@app.route('/api/logout', methods=['POST'])
+def api_logout():
+    """登出接口"""
+    session.clear()
+    return jsonify({'message': '已登出'}), 200
+
+@app.route('/api/check-session', methods=['GET'])
+def check_session():
+    """检查登录状态"""
+    if session.get('logged_in'):
+        return jsonify({'logged_in': True, 'username': session.get('username')}), 200
+    return jsonify({'logged_in': False}), 200
+
+@app.route('/login')
+def login_page():
+    """登录页面"""
+    return send_from_directory(FRONTEND_DIR, 'login.html')
+
+@app.route('/workbench')
+@login_required
+def workbench_page():
+    """工作台页面"""
+    return send_from_directory(FRONTEND_DIR, 'workbench.html')
+
+@app.route('/tool')
+@login_required
+def tool_page():
+    """安评报告智能提取工具页面"""
+    return send_from_directory(FRONTEND_DIR, 'index.html')
+
+# ---------------------------------------------------------------------------
+# API 路由（需要登录）
+# ---------------------------------------------------------------------------
 @app.route('/api/upload', methods=['POST'])
+@login_required
 def upload_file():
     """处理文件上传"""
     if 'file' not in request.files:
@@ -1592,6 +1768,7 @@ def upload_file():
         return jsonify({'error': f'上传文件时出错: {str(e)}'}), 500
 
 @app.route('/api/tables', methods=['POST'])
+@login_required
 def get_tables_list():
     """获取 PDF 或 Word 中所有表格的列表"""
     data = request.get_json()
@@ -1609,20 +1786,16 @@ def get_tables_list():
         ext = (filename or "").rsplit(".", 1)[-1].lower()
         is_word = (ext == "docx") or _is_docx_by_magic(filepath)
         if is_word:
-            # Word：只统计表格个数，返回 table_0, table_1, ... 供勾选
-            from docx import Document
-            doc = Document(filepath)
-            n = len(doc.tables)
-            all_tables_info = [
-                {"id": f"table_{i}", "page_num": i, "name": f"表格{i + 1}", "table_num": i + 1}
-                for i in range(n)
-            ]
-            print(f"[调试] Word 获取到 {n} 个表格")
+            # Word：表名按“表格上一行文字”提取；重复表名只展示一次
+            groups, _ = _get_docx_table_groups(filepath)
+            # 前端只需要 id/name/page/table_num；table_ids/count 作为附加信息保留
+            n = len(groups)
+            print(f"[调试] Word 获取到 {n} 个表格分组（去重表名）")
             return jsonify({
                 'message': '成功获取表格列表',
                 'total_tables': n,
                 'display_tables': n,
-                'tables': all_tables_info
+                'tables': groups
             }), 200
 
         # PDF：使用 extract_all_tables 模块
@@ -1672,6 +1845,7 @@ def get_tables_list():
 
 
 @app.route('/api/extract', methods=['POST'])
+@login_required
 def extract_tables():
     """提取 PDF 或 Word 中的表格，统一输出为 Word (.docx)"""
     data = request.get_json()
@@ -1699,7 +1873,19 @@ def extract_tables():
             final_output_path = os.path.join(app.config['OUTPUT_FOLDER'], output_filename)
             os.makedirs(os.path.dirname(final_output_path), exist_ok=True)
             try:
-                kept = word_remove_non_table_content(filepath, final_output_path, selected_table_ids)
+                # 若前端表格列表做了“表名去重”，这里需要把代表 id 展开为同名的所有表格 id
+                expanded_ids = None
+                if selected_table_ids:
+                    _, id_to_group_ids = _get_docx_table_groups(filepath)
+                    expanded = []
+                    seen = set()
+                    for tid in selected_table_ids:
+                        for x in id_to_group_ids.get(tid, [tid]):
+                            if x not in seen:
+                                seen.add(x)
+                                expanded.append(x)
+                    expanded_ids = expanded
+                kept = word_remove_non_table_content(filepath, final_output_path, expanded_ids)
             except Exception as e:
                 import traceback
                 traceback.print_exc()
@@ -1930,6 +2116,7 @@ def extract_tables():
         }), 500
 
 @app.route('/api/download/<filename>', methods=['GET'])
+@login_required
 def download_file(filename):
     """下载提取结果文件（支持 PDF 与 Word .docx）"""
     # 禁止路径穿越
@@ -2014,8 +2201,10 @@ def test_extract_module():
 
 @app.route("/")
 def index():
-    """提供前端页面"""
-    return send_from_directory(FRONTEND_DIR, "index.html")
+    """根路径：已登录跳到工作台，未登录跳到登录页"""
+    if session.get('logged_in'):
+        return redirect(url_for('workbench_page'))
+    return redirect(url_for('login_page'))
 
 if __name__ == '__main__':
     port = PORT
@@ -2026,7 +2215,9 @@ if __name__ == '__main__':
     print("=" * 50)
     print(f"运行目录: {os.path.dirname(os.path.abspath(__file__))}")
     print(f"前端界面: http://0.0.0.0:{port}")
-    print(f"API接口: http://0.0.0.0:{port}/api")
+    print(f"登录页面: http://0.0.0.0:{port}/login")
+    print(f"工作台:   http://0.0.0.0:{port}/workbench")
+    print(f"API接口:  http://0.0.0.0:{port}/api")
     print("=" * 50)
     if debug:
         print("\n已注册的路由:")

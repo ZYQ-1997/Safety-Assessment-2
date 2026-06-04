@@ -12,3 +12,9 @@ services:
         value: "false"
       - key: PYTHONUNBUFFERED
         value: "1"
+      - key: FLASK_SECRET_KEY
+        generateValue: true
+      - key: LOGIN_USERNAME
+        value: "admin"
+      - key: LOGIN_PASSWORD
+        sync: false

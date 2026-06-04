@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PDF表格提取工具</title>
+    <title>安评报告数据提取工具</title>
     <style>
         * {
             margin: 0;
@@ -16,9 +16,65 @@
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             min-height: 100vh;
             display: flex;
-            justify-content: center;
+            flex-direction: column;
             align-items: center;
             padding: 20px;
+        }
+
+        .top-bar {
+            width: 100%;
+            max-width: 600px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 20px;
+            background: rgba(255,255,255,0.15);
+            border-radius: 12px;
+            margin-bottom: 20px;
+            backdrop-filter: blur(10px);
+        }
+
+        .top-bar-left {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .btn-back {
+            padding: 6px 16px;
+            border: 1px solid rgba(255,255,255,0.5);
+            border-radius: 8px;
+            background: rgba(255,255,255,0.1);
+            color: white;
+            font-size: 13px;
+            cursor: pointer;
+            text-decoration: none;
+            transition: all 0.3s ease;
+        }
+
+        .btn-back:hover {
+            background: rgba(255,255,255,0.25);
+        }
+
+        .top-bar-title {
+            color: white;
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        .btn-logout-top {
+            padding: 6px 16px;
+            border: 1px solid rgba(255,255,255,0.5);
+            border-radius: 8px;
+            background: rgba(255,255,255,0.1);
+            color: white;
+            font-size: 13px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .btn-logout-top:hover {
+            background: rgba(255,255,255,0.25);
         }
 
         .container {
@@ -337,8 +393,16 @@
     </style>
 </head>
 <body>
+    <div class="top-bar">
+        <div class="top-bar-left">
+            <a href="/workbench" class="btn-back">← 返回工作台</a>
+            <span class="top-bar-title">安评报告智能提取</span>
+        </div>
+        <button class="btn-logout-top" id="logoutTopBtn">退出登录</button>
+    </div>
+
     <div class="container">
-        <h1>📄 PDF表格提取工具</h1>
+        <h1>📄 安评报告表格提取工具</h1>
         <p class="subtitle">支持提取 PDF / Word 中的表格，统一导出为 Word (.docx)</p>
 
         <div class="upload-area" id="uploadArea">
@@ -388,6 +452,27 @@
         
         console.log('当前访问方式:', window.location.href);
         console.log('API地址:', API_BASE_URL);
+
+        // 检查登录状态
+        (async function checkAuth() {
+            try {
+                const resp = await fetch(`${API_BASE_URL}/check-session`);
+                const data = await resp.json();
+                if (!data.logged_in) {
+                    window.location.href = '/login';
+                }
+            } catch (e) {
+                // 如果是 API 不通，可能处于 file:// 模式，不做强制跳转
+            }
+        })();
+
+        // 退出登录
+        document.getElementById('logoutTopBtn').addEventListener('click', async () => {
+            try {
+                await fetch(`${API_BASE_URL}/logout`, { method: 'POST' });
+            } catch (e) {}
+            window.location.href = '/login';
+        });
 
         const uploadArea = document.getElementById('uploadArea');
         const fileInput = document.getElementById('fileInput');
