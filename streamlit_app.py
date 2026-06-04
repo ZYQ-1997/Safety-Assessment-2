@@ -148,19 +148,26 @@ def handle_docx_local(fname, data):
             idmap[lb] = g["id"]
         sel = st.multiselect("选择表格（不选=全部）", opts, default=opts, key="docx_sel")
         sids = [idmap[o] for o in sel] if sel else None
-        if st.button("生成结果", key="docx_gen"):
-            out = os.path.join(td, "result.docx")
-            try:
-                with st.spinner("生成中..."):
-                    n = word_remove_non_table(inpath, out, sids)
-                with open(out, "rb") as fh:
-                    st.download_button("下载 Word", fh.read(),
-                                       file_name=f"{Path(fname).stem}_提取结果.docx",
-                                       mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                                       key="docx_dl")
-                st.success(f"完成，保留 {n} 个表格")
-            except Exception as e:
-                st.error(f"失败: {e}")
+        st.button("生成结果", key="docx_gen", on_click=do_docx_gen, args=(inpath, fname, sids))
+
+        if st.session_state.get("download_docx"):
+            out_path = st.session_state.get("download_docx")
+            with open(out_path, "rb") as fh:
+                st.download_button("下载 Word", fh.read(),
+                                   file_name=f"{Path(fname).stem}_提取结果.docx",
+                                   mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                   key="docx_dl")
+            st.success(f"完成，保留 {st.session_state.get('docx_count', 0)} 个表格")
+
+
+def do_docx_gen(inpath, fname, sids):
+    try:
+        out = os.path.join(tempfile.gettempdir(), f"{uuid.uuid4().hex}.docx")
+        n = word_remove_non_table(inpath, out, sids)
+        st.session_state.download_docx = out
+        st.session_state.docx_count = n
+    except Exception as e:
+        st.session_state.docx_error = str(e)
 
 
 def handle_pdf_local(fname, data):
@@ -183,24 +190,31 @@ def handle_pdf_local(fname, data):
         o2i = {o: t["id"] for o, t in zip(ol, disp)}
         sel = st.multiselect("选择表格（不选=全部）", ol, default=[], key="pdf_sel")
         sids = [o2i[o] for o in sel] if sel else None
-        if st.button("生成结果", key="pdf_gen"):
-            od = os.path.join(td, "out")
-            os.makedirs(od, exist_ok=True)
-            try:
-                with st.spinner("提取并生成 Word..."):
-                    r = extract_all_tables_from_pdf(pp, od, sids, output_format="docx")
-                td2 = r.get("tables_data", []) if isinstance(r, dict) else []
-                if not td2:
-                    st.error("未提取到表格")
-                    return
-                buf = build_docx(td2)
-                st.download_button("下载 Word", buf,
-                                   file_name=f"{Path(fname).stem}_提取结果.docx",
-                                   mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                                   key="pdf_dl")
-                st.success(f"完成，{len(td2)} 个表格")
-            except Exception as e:
-                st.error(f"失败: {e}")
+        st.button("生成结果", key="pdf_gen", on_click=do_pdf_gen, args=(pp, fname, sids))
+
+        if st.session_state.get("download_pdf"):
+            buf = st.session_state.get("download_pdf")
+            st.download_button("下载 Word", buf,
+                               file_name=f"{Path(fname).stem}_提取结果.docx",
+                               mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                               key="pdf_dl")
+            st.success(f"完成，{st.session_state.get('pdf_count', 0)} 个表格")
+
+
+def do_pdf_gen(pp, fname, sids):
+    try:
+        od = os.path.join(tempfile.gettempdir(), uuid.uuid4().hex)
+        os.makedirs(od, exist_ok=True)
+        r = extract_all_tables_from_pdf(pp, od, sids, output_format="docx")
+        td2 = r.get("tables_data", []) if isinstance(r, dict) else []
+        if not td2:
+            st.session_state.pdf_error = "未提取到表格"
+            return
+        buf = build_docx(td2)
+        st.session_state.download_pdf = buf
+        st.session_state.pdf_count = len(td2)
+    except Exception as e:
+        st.session_state.pdf_error = str(e)
 
 
 # ==========================================================================
@@ -247,26 +261,37 @@ def api_handle(uploaded_file, base_url):
     o2i = {o: t["id"] for o, t in zip(ol, tabs)}
     sel = st.multiselect("选择表格（不选=全部）", ol, default=[], key="api_sel")
     sids = [o2i[o] for o in sel] if sel else None
-    if st.button("提取", key="api_gen"):
-        try:
-            with st.spinner("提取中..."):
-                pld = {"filename": bfn}
-                if sids is not None:
-                    pld["selected_table_ids"] = sids
-                r2 = http_json("POST", f"{base}/api/extract", pld)
-            dl = r2.get("download_url")
-            oname = r2.get("output_filename", "result.docx")
-            if not dl:
-                st.error(f"提取失败: {r2}")
-                return
-            with st.spinner("下载结果..."):
-                out = http_get(f"{base}{dl}")
-            st.download_button("下载结果", out, file_name=oname,
-                               mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                               key="api_dl")
-            st.success(f"完成，{r2.get('total_tables','?')} 个表格")
-        except Exception as e:
-            st.error(f"失败: {e}")
+    st.button("提取", key="api_gen", on_click=do_api_gen, args=(base, bfn, sids))
+
+    if st.session_state.get("download_api"):
+        out = st.session_state.get("download_api")
+        oname = st.session_state.get("download_api_name", "result.docx")
+        st.download_button("下载结果", out, file_name=oname,
+                           mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                           key="api_dl")
+        st.success(f"完成，{st.session_state.get('api_table_count','?')} 个表格")
+    if st.session_state.get("api_error"):
+        st.error(st.session_state.api_error)
+        st.session_state.api_error = None
+
+
+def do_api_gen(base, bfn, sids):
+    try:
+        pld = {"filename": bfn}
+        if sids is not None:
+            pld["selected_table_ids"] = sids
+        r2 = http_json("POST", f"{base}/api/extract", pld)
+        dl = r2.get("download_url")
+        oname = r2.get("output_filename", "result.docx")
+        if not dl:
+            st.session_state.api_error = f"提取失败: {r2}"
+            return
+        out = http_get(f"{base}{dl}")
+        st.session_state.download_api = out
+        st.session_state.download_api_name = oname
+        st.session_state.api_table_count = r2.get("total_tables", "?")
+    except Exception as e:
+        st.session_state.api_error = str(e)
 
 
 # ==========================================================================
